@@ -60,7 +60,7 @@ bytes = x86_64.encode("mov", {
 Instructions are sourced from https://github.com/asmjit/asmdb
 
 TODO
-* more refactoring better separation
+* more refactoring and better code separation
 * build lua file with all the instructions to get rid of x87data.lua and json.lua dependency
 * jump labels
 * simd, vex, xop, etc instructions
