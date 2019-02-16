@@ -61,7 +61,7 @@ Instructions are sourced from https://github.com/asmjit/asmdb
 
 TODO
 * more refactoring and better code separation
-* build lua file with all the instructions to get rid of x87data.lua and json.lua dependency
+* build lua file with all the instructions to get rid of x86data.js and json.lua dependency
 * jump labels
 * simd, vex, xop, etc instructions
 * windows support
