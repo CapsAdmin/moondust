@@ -49,7 +49,7 @@ bytes = x86_64.encode("mov", {
     reg = "rbx",
     index = "rcx",
     scale = 4,
-    disp = 0x20,
+    disp = -0x20,
 },
 {
     reg = "rax",
