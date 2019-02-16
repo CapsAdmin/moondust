@@ -308,11 +308,11 @@ local function parse_db(db)
 
 		x86_64.map[name] = x86_64.map[name] or {}
 		x86_64.map[name][key] = {
-      func = loadstring(lua)(x86_64),
-      lua = lua,
-      real_operands = real_operands,
-      info = table.concat({"--", name, table.concat(operands, ","), operands2, encoding, table.concat(opcode, " "), metadata}, " | "),
-    }
+			func = loadstring(lua)(x86_64),
+			lua = lua,
+			real_operands = real_operands,
+			info = table.concat({"--", name, table.concat(operands, ","), operands2, encoding, table.concat(opcode, " "), metadata}, " | "),
+		}
 end
 
 	for i, v in ipairs(db.instructions) do
@@ -374,22 +374,22 @@ data = data:gsub("%/%*.-%*/", "")
 parse_db(json.decode(data))
 
 local function helper_error(tbl, str)
-  local candidates = {}
+	local candidates = {}
 
-  for key in pairs(tbl) do
-    table.insert(candidates, {key = key, score = util.string_levenshtein(key, str)})
-  end
+	for key in pairs(tbl) do
+		table.insert(candidates, {key = key, score = util.string_levenshtein(key, str)})
+	end
 
-  table.sort(candidates, function(a, b) return a.score < b.score end)
+	table.sort(candidates, function(a, b) return a.score < b.score end)
 
-  local found = ""
-  for i = 1, 5 do
-    if candidates[i] then
-      found = found  .. "\t" .. candidates[i].key .. "\n"
-    end
-  end
+	local found = ""
+	for i = 1, 5 do
+		if candidates[i] then
+			found = found  .. "\t" .. candidates[i].key .. "\n"
+		end
+	end
 
-  return found
+	return found
 end
 
 
@@ -426,7 +426,7 @@ function x86_64.encode(func, ...)
 	end
 
 	if not x86_64.map[func] then
-    error("no such function " .. func .. "\ndid you mean one of these?\n" .. helper_error(x86_64.map, func), 2)
+		error("no such function " .. func .. "\ndid you mean one of these?\n" .. helper_error(x86_64.map, func), 2)
 	end
 
 	if lua_number then
@@ -453,7 +453,7 @@ function x86_64.encode(func, ...)
 	str = table.concat(str, ",")
 
 	if not x86_64.map[func][str] then
-    error(func .. " does not take arguments " .. str .. "\ndid you mean one of these?\n" .. helper_error(x86_64.map[func], str), 2)
+		error(func .. " does not take arguments " .. str .. "\ndid you mean one of these?\n" .. helper_error(x86_64.map[func], str), 2)
 	end
 
 	local data = x86_64.map[func][str]

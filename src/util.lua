@@ -96,11 +96,11 @@ end
 local ffi = require("ffi")
 
 function util.object_to_address(var)
-    if type(var) == "cdata" or type (var) == "string" then
-        return assert(loadstring("return " .. tostring(ffi.cast("void *", var)):match(": (0x.+)") .. "ULL"))()
-    end
+	if type(var) == "cdata" or type (var) == "string" then
+		return assert(loadstring("return " .. tostring(ffi.cast("void *", var)):match(": (0x.+)") .. "ULL"))()
+	end
 
-    return loadstring("return " .. string.format("%p", var) .. "ULL")()
+	return loadstring("return " .. string.format("%p", var) .. "ULL")()
 end
 
 
@@ -174,7 +174,7 @@ function util.string_binformat(str, row_width, space_separator, with_hex, format
 
 	for _, char in pairs(str) do
 
-        local bin = util.number2binary(char:byte(), 8)
+		local bin = util.number2binary(char:byte(), 8)
 		if with_hex then
 			table.insert(out, ("%02X/"):format(char:byte()))
 		end
