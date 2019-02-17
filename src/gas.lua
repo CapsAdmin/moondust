@@ -10,6 +10,14 @@ function gas.dump_asm(code, format_func, compare, left_align)
 	end
 end
 
+function gas.dump_bin(bin, format_func, compare, left_align)
+	local tbl = gas.bin_to_table(bin)
+	if tbl then
+		local str = gas.format_table(tbl, nil, format_func, compare, left_align)
+		io.write(str, "\n")
+	end
+end
+
 function gas.dump_c(code, format_func)
 	if not code:find("int main") then
 		local template = [[
@@ -25,7 +33,7 @@ function gas.dump_c(code, format_func)
 		code = template
 	end
 
-	local tbl = gas.asm_to_table(code, true)
+	local tbl = gas.c_to_table(code)
 	if tbl then
 		local str = gas.format_table(tbl, nil, format_func)
 		io.write(str, "\n")
@@ -70,6 +78,7 @@ function gas.format_table(tbl, skip_print_matched, format_func, compare, left_al
 		for i, data in ipairs(tbl) do
 			local str = string.format("%-"..longest_left.."s: %-"..longest_right.."s", data.guess, data.hex)
 			if not skip_print_matched then
+				str = data.address .. ": " .. str
 				table.insert(out, str)
 			end
 
@@ -112,8 +121,8 @@ function gas.format_table(tbl, skip_print_matched, format_func, compare, left_al
 	return table.concat(out, "\n"), ok
 end
 
-local function to_table(str, c_source, execute)
-	if not c_source then
+local function to_table(str, c_source, execute, raw)
+	if not c_source and not raw then
 		if not str:find("_start", nil, true) then
 			str = ".global _start\n.text\n_start:\n" .. str
 			str = str:gsub("; ", "\n")
@@ -122,43 +131,60 @@ local function to_table(str, c_source, execute)
 	end
 
 	local function go()
+		local bin
+		if not raw then
+			if c_source then
+				local f, err = io.open("temp.c", "wb")
 
-		if c_source then
-			local f, err = io.open("temp.c", "wb")
+				if not f then
+					return nil, "failed to read temp.c: " .. err
+				end
 
-			if not f then
-				return nil, "failed to read temp.c: " .. err
+				f:write(str)
+				f:close()
+
+				if not os.execute("gcc -S temp.c") then return nil, "failed to compile C code" end
+			else
+				local f, err = io.open("temp.s", "wb")
+
+				if not f then
+					return nil, "failed to read temp.s: " .. err
+				end
+
+				f:write(str)
+				f:close()
 			end
 
-			f:write(str)
-			f:close()
+			if not os.execute("as -march=generic64 -o temp.o temp.s") then return nil, "failed to assemble temp.S" end
+			if not os.execute("ld -s -o temp temp.o") then return nil, "failed to generate executable from temp.o" end
 
-			if not os.execute("gcc -S temp.c") then return nil, "failed to compile C code" end
+			if execute then
+				os.execute("./temp")
+			end
+
+			local f, err = io.popen("objdump -M suffix --special-syms --disassemble-zeroes -S -M amd64 --insn-width=16 --disassemble temp")
+			if not f then
+				return nil, "failed to read temp.dump: " .. err
+			end
+			bin = f:read("*all")
+			f:close()
 		else
-			local f, err = io.open("temp.s", "wb")
-
+			local f, err = io.open("temp", "wb")
 			if not f then
-				return nil, "failed to read temp.s: " .. err
+				return nil, err
 			end
-
 			f:write(str)
+			f:close()
+
+			local f, err = io.popen("objdump -M suffix -b binary -m i386:x86-64 --special-syms --disassemble-zeroes -S -M amd64 --insn-width=16 --disassemble -D temp")
+			if not f then
+				return nil, "failed to read temp.dump: " .. err
+			end
+			bin = f:read("*all")
 			f:close()
 		end
 
-		if not os.execute("as -march=generic64 -o temp.o temp.s") then return nil, "failed to assemble temp.S" end
-		if not os.execute("ld -s -o temp temp.o") then return nil, "failed to generate executable from temp.o" end
-
-		if execute then
-			os.execute("./temp")
-		end
-
-		local f, err = io.popen("objdump -M suffix --special-syms --disassemble-zeroes -S -M amd64 --insn-width=16 --disassemble temp")
-		if not f then
-			return nil, "failed to read temp.dump: " .. err
-		end
-		local bin = f:read("*all")
-		f:close()
-		local content = bin:match("<.text>:(.+)")
+		local content = bin:match("<.text>:(.+)") or bin:match("<.data>:(.+)")
 		if not content then
 			return nil, "failed to find .text"
 		end
@@ -171,7 +197,7 @@ local function to_table(str, c_source, execute)
 			local address, bytes, guess = line:match("^(.-):%s+(%S.-)  %s+(%S.+)")
 			guess = guess:gsub(",", ", ")
 			guess = guess:gsub("%%", "")
-			guess = guess:gsub("%$", "IMM_")-- FIX THE CONSOLE OUTPUT
+			guess = guess:gsub("%$", "")
 			guess = guess:gsub(",", "")
 			guess = guess:gsub("%s+", " ")
 			guess = util.string_split(guess, " ")
@@ -206,6 +232,10 @@ end
 
 function gas.c_to_table(str, execute)
 	return to_table(str, true, execute)
+end
+
+function gas.bin_to_table(str)
+	return to_table(str, true, execute, true)
 end
 
 return gas

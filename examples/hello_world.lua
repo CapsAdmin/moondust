@@ -4,7 +4,7 @@ local asm = require("assembler")
 local util = require("util")
 local ffi = require("ffi")
 
-local mcode = asm.compile(function()
+local mcode = asm.compile(function(a)
 	local msg = "hello world!\n"
 
 	local STDOUT_FILENO = 1
@@ -12,7 +12,7 @@ local mcode = asm.compile(function()
 
 	mov(r12, rdi)
 
-	local loop = pos()
+	label("loop")
 		mov(rax, WRITE)
 		mov(rdi, STDOUT_FILENO)
 		mov(rsi, util.object_to_address(msg))
@@ -21,8 +21,15 @@ local mcode = asm.compile(function()
 		inc(r12)
 	cmp(r12, 10)
 
-	jne(loop - pos())
+	jne(label.loop)
+
+	jmp(label["no!"])
+		mov(rax, 777)
+	label("no!")
+
+	-- yes!
 	mov(rax, 1337)
+
 	ret()
 end)
 

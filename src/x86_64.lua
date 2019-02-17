@@ -94,8 +94,11 @@ function x86_64.MODRM(op1, op2)
 		scale = op2.scale
 	end
 
-	-- build modrm byte
-	if reg and base then
+	if not index and scale == 1 and disp == 0 then
+		modrm = 0
+		modrm = bit.bor(modrm, bit.lshift(reg, 3))
+		modrm = bit.bor(modrm, base, 3)
+	elseif reg and base then
 		-- 00 000 000
 		modrm = 0
 
@@ -295,11 +298,20 @@ local function parse_db(db)
 			end
 		end
 
+		local has_relative = false
+		local alt_key
+
 		for i, v in ipairs(real_operands) do
 			if util.string_startswith(v, "rel") then
 				instr_length = instr_length + tonumber(v:sub(4)) / 8
-				lua = lua .. "\nop" .. i .. " = op" .. i .. " - " .. instr_length .. "\n"
+				--lua = lua .. "\nop" .. i .. " = op" .. i .. " - " .. instr_length .. "\n"
+				has_relative = true
+				operands[i] = "table"
 			end
+		end
+
+		if has_relative then
+			alt_key = table.concat(operands)
 		end
 
 		lua = lua .. " return " .. table.concat(instr, "..")
@@ -310,10 +322,20 @@ local function parse_db(db)
 		x86_64.map[name][key] = {
 			func = loadstring(lua)(x86_64),
 			lua = lua,
+			name = name,
+			operands = operands,
+			encoding = encoding,
+			opcode = opcode,
+			metadata = metadata,
+			operands2 = operands2,
 			real_operands = real_operands,
-			info = table.concat({"--", name, table.concat(operands, ","), operands2, encoding, table.concat(opcode, " "), metadata}, " | "),
+			has_relative = has_relative,
 		}
-end
+
+		if alt_key then
+			x86_64.map[name][alt_key] = x86_64.map[name][key]
+		end
+	end
 
 	for i, v in ipairs(db.instructions) do
 		local name, operands, encoding, opcode, metadata = unpack(v)
@@ -402,9 +424,9 @@ function x86_64.encode(func, ...)
 	for i = 1, max do
 		local arg = select(i, ...)
 
-		if type(arg) == "table" then
+		if type(arg) == "table" and type(arg.reg) == "string" then
 			if arg.disp or arg.scale then
-				str[i] = "rm" .. x86_64.RegLookup[arg.reg].bits
+				str[i] = "m" .. x86_64.RegLookup[arg.reg].bits
 			else
 				str[i] = "r" .. x86_64.RegLookup[arg.reg].bits
 			end
@@ -418,15 +440,13 @@ function x86_64.encode(func, ...)
 					break
 				end
 			end
-		elseif type(arg) == "string" then
-			str[i] = "i64"
 		else
 			str[i] = type(arg)
 		end
 	end
 
 	if not x86_64.map[func] then
-		error("no such function " .. func .. "\ndid you mean one of these?\n" .. helper_error(x86_64.map, func), 2)
+		error("no such function " .. func .. "\ndid you mean one of these?\n" .. helper_error(x86_64.map, func), 3)
 	end
 
 	if lua_number then
@@ -453,7 +473,14 @@ function x86_64.encode(func, ...)
 	str = table.concat(str, ",")
 
 	if not x86_64.map[func][str] then
-		error(func .. " does not take arguments " .. str .. "\ndid you mean one of these?\n" .. helper_error(x86_64.map[func], str), 2)
+		error(func .. " does not take arguments " .. str .. "\ndid you mean one of these?\n" .. helper_error(x86_64.map[func], str), 3)
+	end
+
+	if x86_64.pre_encode then
+		local res = x86_64.pre_encode(func, str, ...)
+		if res ~= nil then
+			return res
+		end
 	end
 
 	local data = x86_64.map[func][str]
@@ -463,8 +490,7 @@ function x86_64.encode(func, ...)
 		bytes = data.func(...),
 		arg_types = str,
 		args = {...},
-		lua = data.lua,
-		real_operands = data.real_operands,
+		metadata = data,
 	}
 end
 

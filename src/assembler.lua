@@ -14,6 +14,10 @@ do
 		return self.reg
 	end
 
+	function meta:__call()
+		return asm.reg(self.reg, self.index, self.disp or 0 , self.scale or 1)
+	end
+
 	function meta.__add(l, r)
 		if getmetatable(r) == meta then
 			return asm.reg(l.reg, r.reg, r.disp, r.scale)
@@ -42,7 +46,7 @@ do
 		return l
 	end
 
-	function asm.reg(reg, index, disp, scale)
+	local function create_reg(reg, index, scale, disp)
 		return setmetatable({
 			reg = reg,
 			index = index,
@@ -50,6 +54,26 @@ do
 			scale = scale,
 		}, meta)
 	end
+
+	do
+		local meta = {}
+		meta.__index = meta
+		function meta:__call(reg, index, scale, disp)
+			return create_reg(reg, index, scale, disp)
+		end
+
+		asm.reg = {}
+
+		for reg in pairs(x86_64.RegLookup) do
+			asm.reg[reg] = create_reg(reg)
+		end
+
+		asm.reg = setmetatable(asm.reg, meta)
+	end
+end
+
+function asm.addr(num)
+	return ffi.cast("void *", num)
 end
 
 if jit.os ~= "Windows" then
@@ -95,7 +119,7 @@ local function check_gas(data)
 				arg = tonumber(arg)
 			end
 
-			if data.real_operands[i]:sub(1,1) == "i" then
+			if data.metadata.real_operands[i]:sub(1,1) == "i" then
 				str = str .. "$"
 			end
 			str = str .. tostring(arg)
@@ -109,13 +133,122 @@ local function check_gas(data)
 	end
 
 	gas.dump_asm(str, format_func, data.bytes, false)
+end
 
-	if false then
-		print(str)
-		print(format_func(data.bytes))
-		data.bytes = nil
-		print(data.lua) data.lua = nil
-		table.print(data)
+do
+	local meta = {}
+
+	function meta:__index(key)
+		if meta[key] then
+			return meta[key]
+		end
+
+		if x86_64.map[key] then
+			return function(_, ...)
+				return self:encode(key, ...)
+			end
+		end
+	end
+
+	function meta:get_size()
+		return self.size
+	end
+
+	function meta:write(str)
+		table.insert(self.buffer, str)
+		self.size = self.size + #str
+	end
+
+	function meta:encode(name, ...)
+		local data = x86_64.encode(name, ...)
+		if type(data) == "table" and type(data.bytes) == "string" then
+			self:write(data.bytes)
+		end
+		return data
+	end
+
+	function meta:create_label(name)
+		local label = {name = name, start_pos = self:get_size()}
+		table.insert(self.labelsi, label)
+		self.labels[name] = label
+	end
+
+	function meta:get_label(name)
+		return self.labels[name]
+	end
+
+	function meta:virtual_label(name)
+		return {label_name = name}
+	end
+
+	function meta:compile()
+		if #self.buffer == 0 then
+			return nil, "nothing to assemble"
+		end
+
+		local str = table.concat(self.buffer)
+
+		local found = {}
+		for _, stop in ipairs(self.labelsi) do
+			if stop.stop_pos then
+				for _, start in ipairs(self.labelsi) do
+					if start.name == stop.name and start.start_pos then
+						table.insert(found, {
+							name = start.name,
+							start = start.start_pos,
+							stop = stop.stop_pos,
+							mnemonic = stop.mnemonic
+						})
+					end
+				end
+			end
+		end
+
+		table.sort(found, function(a, b) return a.stop < b.stop end)
+		local offset = 0
+
+		for i, label in ipairs(found) do
+			local start = label.start
+			local stop = label.stop
+
+			local rel = start - stop
+
+			if rel < 0 then
+				rel = rel - #x86_64.encode(label.mnemonic, rel).bytes  -- FIX ME
+			end
+
+			local bytes = x86_64.encode(label.mnemonic, rel).bytes
+
+			str = str:sub(1, stop + offset) .. bytes .. str:sub(stop + 1 + offset, #str)
+			offset = offset + #bytes
+		end
+
+		local mem = asm.executable_memory(str)
+
+		if mem == nil then
+			return nil, "failed to map memory"
+		end
+
+		return mem, #str
+	end
+
+	function asm.assembler()
+		local self = setmetatable({}, meta)
+
+		self.buffer = {}
+		self.size = 0
+		self.labels = {}
+		self.labelsi = {}
+
+		function x86_64.pre_encode(name, argstr, a,b,c,d,e)
+			local info = x86_64.map[name][argstr]
+			if info.has_relative and type(a) == "table" then
+				table.insert(self.labelsi, {name = a.label_name, stop_pos = self:get_size(), mnemonic = name})
+				return false
+			end
+		end
+
+		return self
 	end
 end
 
@@ -131,28 +264,31 @@ local type_translate = {
 	u64 = "uint64_t",
 }
 
-local compile_env = {}
-
 for k,v in pairs(type_translate) do
-	compile_env[k] = function(num) return ffi.new(k, num) end
+	asm[k] = function(num) return ffi.new(k, num) end
 end
 
 function asm.compile(func, validate)
-	local str = {}
-	local size = 0
+	local a = asm.assembler()
 
-	local get_pos = function() return size end
+	local env = {}
+
+	for k,v in pairs(type_translate) do
+		env[k] = function(num) return ffi.new(k, num) end
+	end
+
+	env.pos = function() return a:get_size() end
+	env.label = setmetatable({}, {__call = function(_, name) return a:create_label(name) end, __index = function(_, key) return a:virtual_label(key) end})
 
 	setfenv(func, setmetatable({}, {__index = function(s, key)
-		if compile_env[key] then
-			return compile_env[key]
+		if env[key] then
+			return env[key]
 		end
 
 		if x86_64.map[key] then
 			return function(...)
-				local data = x86_64.encode(key, ...)
-				table.insert(str, data.bytes)
-				size = size + #data.bytes
+				local data = a:encode(key, ...)
+
 				if validate then
 					check_gas(data)
 				end
@@ -163,26 +299,10 @@ function asm.compile(func, validate)
 			return asm.reg(key)
 		end
 
-		if key == "pos" then
-			return get_pos
-		end
-
 		return _G[key]
-	end}))()
+	end}))(a)
 
-	if #str == 0 then
-		return nil, "nothing to assemble"
-	end
-
-	str = table.concat(str)
-
-	local mem = asm.executable_memory(str)
-
-	if mem == nil then
-		return nil, "failed to map memory"
-	end
-
-	return mem, #str
+	return a:compile()
 end
 
 return asm
