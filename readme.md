@@ -14,22 +14,23 @@ local util = require("util")
 local ffi = require("ffi")
 
 local mcode = asm.compile(function()
-    -- syntax resembles intel style
+	local msg = "hello world!\n"
 
-    local msg = "hello world!\n"
-    local STDOUT_FILENO = 1
-    local WRITE = 1
+	-- syntax resembles intel style
+	mov(rax, 1) -- WRITE
+	mov(rdi, 1) -- STDOUT
+	mov(rsi, util.object_to_address(msg))
+	mov(rdx, #msg)
 
-    mov(rax, WRITE)
-    mov(rdi, STDOUT_FILENO)
-    mov(rsi, util.object_to_address(msg))
-    mov(rdx, #msg)
+	syscall()
 
-    syscall()
+	jmp("no!")
+		mov(rax, 777)
+	label("no!")
 
-    mov(rax, 1337)
+	mov(rax, 1337)
 
-    ret()
+	ret()
 end)
 
 local func = ffi.cast("uint64_t (*)(uint64_t)", mcode)
@@ -46,13 +47,13 @@ mov(rbx + rcx * 4 - 0x20, rax)
 -- is the same as:
 local x86_64 = require("x86_64")
 bytes = x86_64.encode("mov", {
-    reg = "rbx",
-    index = "rcx",
-    scale = 4,
-    disp = -0x20,
+	reg = "rbx",
+	index = "rcx",
+	scale = 4,
+	disp = -0x20,
 },
 {
-    reg = "rax",
+	reg = "rax",
 })
 -- where the bytes are simply placed into a buffer
 ```
