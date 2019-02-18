@@ -10,29 +10,16 @@ local mcode = asm.compile(function(a)
 	local STDOUT_FILENO = 1
 	local WRITE = 1
 
-	mov(r12, rdi)
-
-	label("loop")
-		mov(rax, WRITE)
-		mov(rdi, STDOUT_FILENO)
-		mov(rsi, util.object_to_address(msg))
-		mov(rdx, #msg)
-		syscall()
-		inc(r12)
-	cmp(r12, 10)
-
-	jne(label.loop)
-
-	jmp(label["no!"])
-		mov(rax, 777)
-	label("no!")
-
-	-- yes!
-	mov(rax, 1337)
+	mov(rax, WRITE)
+	mov(rdi, STDOUT_FILENO)
+	mov(rsi, util.object_to_address(msg))
+	mov(rdx, #msg)
+	syscall()
+	inc(r12)
 
 	ret()
 end)
 
-local func = ffi.cast("uint64_t (*)(uint64_t)", mcode)
+local func = ffi.cast("void (*)()", mcode)
 
-print(func(0))
+func()

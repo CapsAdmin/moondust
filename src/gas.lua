@@ -50,21 +50,6 @@ function gas.format_table(tbl, skip_print_matched, format_func, compare, left_al
 	local out = {}
 
 	do
-		local longest = 0
-
-		for _, data in ipairs(tbl) do
-			for _, arg in ipairs(data.guess) do
-				longest = math.max(longest, #arg)
-			end
-		end
-
-		for _, data in ipairs(tbl) do
-			local fmt = ("%-"..longest.."s "):rep(#data.guess - 1) .. "%s "
-			data.guess = string.format(fmt, unpack(data.guess))
-		end
-	end
-
-	do
 		local longest_left = 0
 		local longest_right = 0
 
@@ -76,9 +61,8 @@ function gas.format_table(tbl, skip_print_matched, format_func, compare, left_al
 		end
 
 		for i, data in ipairs(tbl) do
-			local str = string.format("%-"..longest_left.."s: %-"..longest_right.."s", data.guess, data.hex)
+			local str = string.format("%s: %-"..longest_left.."s: %-"..longest_right.."s", data.address, data.guess, data.hex)
 			if not skip_print_matched then
-				str = data.address .. ": " .. str
 				table.insert(out, str)
 			end
 
@@ -92,7 +76,7 @@ function gas.format_table(tbl, skip_print_matched, format_func, compare, left_al
 				local hex = format_func(compare_bytes)
 
 				hex =  ("%-"..longest_right.."s"):format(hex)
-				hex = (" "):rep(longest_left + 2) .. hex
+				hex = (" "):rep(longest_left + #data.address + #": " * 2) .. hex
 
 				hex = hex:gsub("(%s+)$", "")
 
@@ -110,7 +94,6 @@ function gas.format_table(tbl, skip_print_matched, format_func, compare, left_al
 				end
 
 				table.insert(out, diff .. " << DIFF")
-				--table.insert(out, (" "):rep(longest_left + 2) .. ("^"):rep(#hex))
 				table.insert(out, "")
 
 				ok = false
@@ -151,7 +134,7 @@ local function to_table(str, c_source, execute, raw)
 					return nil, "failed to read temp.s: " .. err
 				end
 
-				f:write(str)
+				f:write(".intel_syntax noprefix\n" .. str)
 				f:close()
 			end
 
@@ -162,7 +145,7 @@ local function to_table(str, c_source, execute, raw)
 				os.execute("./temp")
 			end
 
-			local f, err = io.popen("objdump -M suffix --special-syms --disassemble-zeroes -S -M amd64 --insn-width=16 --disassemble temp")
+			local f, err = io.popen("objdump -M intel -M suffix --special-syms --disassemble-zeroes -S -M amd64 --insn-width=16 --disassemble temp")
 			if not f then
 				return nil, "failed to read temp.dump: " .. err
 			end
@@ -196,11 +179,9 @@ local function to_table(str, c_source, execute, raw)
 			tbl = tbl or {}
 			local address, bytes, guess = line:match("^(.-):%s+(%S.-)  %s+(%S.+)")
 			guess = guess:gsub(",", ", ")
-			guess = guess:gsub("%%", "")
-			guess = guess:gsub("%$", "")
-			guess = guess:gsub(",", "")
 			guess = guess:gsub("%s+", " ")
-			guess = util.string_split(guess, " ")
+			guess = util.string_trim(guess)
+
 
 			local bin = ""
 

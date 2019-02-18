@@ -61,7 +61,7 @@ Instructions are sourced from https://github.com/asmjit/asmdb
 
 TODO
 * more refactoring and better code separation
+* shorter way of encoding modrm+sib and rex prefix, the code feels stupid at the moment
+* suppport instructions like simd, vex, xop, etc
 * build lua file with all the instructions to get rid of x86data.js and json.lua dependency
-* jump labels
-* simd, vex, xop, etc instructions
 * windows support

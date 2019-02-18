@@ -8,67 +8,137 @@ do
 	meta.__index = meta
 
 	function meta:__tostring()
-		if self.disp or self.index or self.scale then
-			return string.format("%s(%s, %s, %s)", self.disp or "", self.reg, self.index or "", self.scale or "")
+		local str = ""
+
+		if self.indirect then
+			str = str .. "["
 		end
-		return self.reg
+
+		if self.reg then
+			str = str .. self.reg
+		end
+
+		if self.index then
+			str = str .. "+" .. self.index
+		end
+
+		if self.scale then
+			str = str .. "*" .. self.scale
+		end
+
+		if self.disp then
+			if self.reg or self.index then
+				str = str .. (self.disp > 0 and "+" or "-") .. tostring(self.disp)
+			else
+				str = str .. tostring(self.disp)
+			end
+		end
+
+		if self.indirect then
+			str = str .. "]"
+		end
+
+		return str
 	end
 
+	function meta:copy()
+		return setmetatable({
+			reg = self.reg,
+			base = self.base,
+			index = self.index,
+			scale = self.scale,
+			disp = self.disp,
+		}, meta)
+	end
+
+
 	function meta:__call()
-		return asm.reg(self.reg, self.index, self.disp or 0 , self.scale or 1)
+		local new = asm.reg(self.reg, self.index, self.scale, self.disp, true)
+		return new
 	end
 
 	function meta.__add(l, r)
+		if type(l) == "number" then
+			r,l = l,r
+		end
+
 		if getmetatable(r) == meta then
-			return asm.reg(l.reg, r.reg, r.disp, r.scale)
+			l = l:copy()
+			l.index = r.reg or l.index
+			l.disp = r.disp or l.disp
+			l.scale = r.scale or l.scale
+			l.indirect = true
 		end
 
 		if type(r) == "number" then
+			l = l:copy()
 			l.disp = r
+			l.indirect = true
 		end
 
 		return l
 	end
 
 	function meta.__sub(l, r)
+		if type(l) == "number" then
+			r,l = l,r
+		end
 		if type(r) == "number" then
+			l = l:copy()
 			l.disp = -r
+			l.indirect = true
 		end
 
 		return l
 	end
 
 	function meta.__mul(l, r)
+		if type(l) == "number" then
+			r,l = l,r
+		end
+
 		if type(r) == "number" then
+			l = l:copy()
 			l.scale = r
+			l.indirect = true
 		end
 
 		return l
 	end
 
-	local function create_reg(reg, index, scale, disp)
+	local function create_reg(reg, index, scale, disp, indirect)
 		return setmetatable({
 			reg = reg,
 			index = index,
 			disp = disp,
 			scale = scale,
+			indirect = indirect,
 		}, meta)
 	end
 
 	do
-		local meta = {}
-		meta.__index = meta
-		function meta:__call(reg, index, scale, disp)
-			return create_reg(reg, index, scale, disp)
+		local lib_meta = {}
+		lib_meta.__index = lib_meta
+		function lib_meta:__call(reg, index, scale, disp, indirect)
+			if getmetatable(reg) == meta then
+				local new = reg:copy()
+				new.indirect = true
+				return new
+			elseif type(reg) ~= "string" then
+				disp = reg
+				reg = nil
+				indirect = true
+			end
+			return create_reg(reg, index, scale, disp, indirect)
 		end
 
 		asm.reg = {}
 
-		for reg in pairs(x86_64.RegLookup) do
+		for reg in pairs(x86_64.reginfo) do
 			asm.reg[reg] = create_reg(reg)
 		end
 
-		asm.reg = setmetatable(asm.reg, meta)
+		asm.reg = setmetatable(asm.reg, lib_meta)
 	end
 end
 
@@ -109,30 +179,27 @@ local function check_gas(data)
 
 	local str = data.name .. " "
 	local types = util.string_split(data.arg_types, ",")
-	for i = #data.args, 1, -1 do
+	for i = 1, #data.args do
 		local arg, type = data.args[i], types[i]
 
-		if type:sub(1,1) == "i" then
+		if type:sub(1,1) == "i" or type:sub(1,1) == "u" then
 			if _G.type(arg) == "string" then
 				arg = tostring(asm.ObjectToAddress(arg)):sub(0,-3)
 			elseif _G.type(arg) == "cdata" then
 				arg = tonumber(arg)
 			end
 
-			if data.metadata.real_operands[i]:sub(1,1) == "i" then
-				str = str .. "$"
-			end
 			str = str .. tostring(arg)
 		end
 		if type:sub(1,1) == "r" or type:sub(1,1) == "m" then
-			str = str .. "%" .. tostring(arg)
+			str = str .. tostring(arg)
 		end
-		if i ~= 1 then
+		if i ~= #data.args then
 			str = str .. ","
 		end
 	end
 
-	gas.dump_asm(str, format_func, data.bytes, false)
+	gas.dump_asm(str, function(bytes) return util.string_binformat(bytes, 15, "  ", true) end, data.bytes, false)
 end
 
 do
@@ -167,7 +234,7 @@ do
 		return data
 	end
 
-	function meta:create_label(name)
+	function meta:label(name)
 		local label = {name = name, start_pos = self:get_size()}
 		table.insert(self.labelsi, label)
 		self.labels[name] = label
@@ -175,10 +242,6 @@ do
 
 	function meta:get_label(name)
 		return self.labels[name]
-	end
-
-	function meta:virtual_label(name)
-		return {label_name = name}
 	end
 
 	function meta:compile()
@@ -242,8 +305,8 @@ do
 
 		function x86_64.pre_encode(name, argstr, a,b,c,d,e)
 			local info = x86_64.map[name][argstr]
-			if info.has_relative and type(a) == "table" then
-				table.insert(self.labelsi, {name = a.label_name, stop_pos = self:get_size(), mnemonic = name})
+			if info.has_relative and type(a) == "string" then
+				table.insert(self.labelsi, {name = a, stop_pos = self:get_size(), mnemonic = name})
 				return false
 			end
 		end
@@ -278,7 +341,7 @@ function asm.compile(func, validate)
 	end
 
 	env.pos = function() return a:get_size() end
-	env.label = setmetatable({}, {__call = function(_, name) return a:create_label(name) end, __index = function(_, key) return a:virtual_label(key) end})
+	env.label = function(name) return a:label(name) end
 
 	setfenv(func, setmetatable({}, {__index = function(s, key)
 		if env[key] then
@@ -287,15 +350,14 @@ function asm.compile(func, validate)
 
 		if x86_64.map[key] then
 			return function(...)
-				local data = a:encode(key, ...)
-
-				if validate then
+				local data, err = a:encode(key, ...)
+				if validate and data then
 					check_gas(data)
 				end
 			end
 		end
 
-		if x86_64.RegLookup[key] then
+		if x86_64.reginfo[key] then
 			return asm.reg(key)
 		end
 
