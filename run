@@ -1,0 +1,5 @@
+#!/bin/sh
+
+if [ $1 = "test" ]; then
+    luajit test/test.lua
+fi

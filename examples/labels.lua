@@ -1,4 +1,4 @@
-package.path = package.path .. ";../src/?.lua"
+package.path = package.path .. ";./src/?.lua"
 
 local asm = require("assembler")
 local util = require("util")

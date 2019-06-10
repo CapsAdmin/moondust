@@ -7,35 +7,47 @@ local x86_64 = {}
 do
 	x86_64.reginfo = {}
 
-	local base = {
-		"ax", "cx", "dx", "bx",
-		"sp", "bp", "si", "di",
-	}
+	do -- integers
+		local base = {
+			"ax", "cx", "dx", "bx",
+			"sp", "bp", "si", "di",
+		}
 
-	for _, bit in ipairs({64, 32, 16, 8}) do
-		local tbl = {}
+		for _, bit in ipairs({64, 32, 16, 8}) do
+			local tbl = {}
 
-		if bit == 64 then
-			for i, v in ipairs(base) do tbl[i] = "r" .. v; tbl[i + 7 + 1] = "r" .. (i+7) end
-		elseif bit == 32 then
-			for i, v in ipairs(base) do tbl[i] = "e" .. v; tbl[i + 7 + 1] = "r" .. (i+7) .. "d" end
-		elseif bit == 16 then
-			for i, v in ipairs(base) do tbl[i] = v; tbl[i + 7 + 1] = "r" .. (i+7) .. "w" end
-		else
-			tbl = {
-				"al", "cl", "dl","bl",
-				"ah", "ch", "dh", "bh",
-				"spl", "bpl", "sil", "dil",
-				"r8b", "r9b", "r10b", "r11b",
-				"r12b", "r13b", "r14b", "r15b",
-			}
+			if bit == 64 then
+				for i, v in ipairs(base) do tbl[i] = "r" .. v; tbl[i + 7 + 1] = "r" .. (i+7) end
+			elseif bit == 32 then
+				for i, v in ipairs(base) do tbl[i] = "e" .. v; tbl[i + 7 + 1] = "r" .. (i+7) .. "d" end
+			elseif bit == 16 then
+				for i, v in ipairs(base) do tbl[i] = v; tbl[i + 7 + 1] = "r" .. (i+7) .. "w" end
+			else
+				tbl = {
+					"al", "cl", "dl","bl",
+					"ah", "ch", "dh", "bh",
+					"spl", "bpl", "sil", "dil",
+					"r8b", "r9b", "r10b", "r11b",
+					"r12b", "r13b", "r14b", "r15b",
+				}
+			end
+
+			for i, reg in ipairs(tbl) do
+				x86_64.reginfo[reg] = {
+					bits = bit,
+					extra = i > 8,
+					index = (i - 1)%8,
+				}
+			end
 		end
+	end
 
-		for i, reg in ipairs(tbl) do
-			x86_64.reginfo[reg] = {
-				bits = bit,
+	do -- xmm
+		for i = 0, 15 do
+			x86_64.reginfo["xmm" .. i] = {
+				bits = "xmm",
 				extra = i > 8,
-				index = (i - 1)%8,
+				index = i%8,
 			}
 		end
 	end
@@ -81,7 +93,7 @@ function x86_64.encode_rex(W, flip, B, R, X)
 end
 
 function x86_64.encode_modrm_sib(op1, op2)
-	local reg1 = x86_64.reginfo[op1.reg].index
+	local reg1 = op1.reg and x86_64.reginfo[op1.reg].index
 	local reg2
 	local index
 	local base
@@ -223,6 +235,16 @@ local type_translate2 = {
 
 x86_64.map = {}
 
+local function dump(self)
+	for k,v in pairs(self) do
+		if k == "real_operands" then
+		   v = table.concat(v, ", ")
+		end
+
+		print(k .. " = " .. tostring(v))
+	end
+end
+
 local function parse_db(db)
 	local function parse_instruction(name, operands, encoding, opcode, metadata, operands2)
 		local real_operands = {}
@@ -233,7 +255,6 @@ local function parse_db(db)
 			operands[i] = v
 			arg_line[i] =  "op" .. i
 		end
-
 
 		local key = table.concat(operands, ",")
 
@@ -262,7 +283,7 @@ local function parse_db(db)
 
 		for _, byte in ipairs(opcode) do
 			if byte == "/r" then
-				if encoding == "MR" and operands[1]:sub(1,1) == "m" and operands[2]:sub(1,1) == "r" then
+				if encoding == "MR" and operands[1]:sub(1,1) == "m" and (operands[2]:sub(1,1) == "r" or operands[2]:sub(1,1) == "x") then
 					table.insert(instr, "x86_64.encode_modrm_sib(op2, op1)")
 				else
 					table.insert(instr, "x86_64.encode_modrm_sib(op1, op2)")
@@ -320,6 +341,7 @@ local function parse_db(db)
 			operands2 = operands2,
 			real_operands = real_operands,
 			has_relative = has_relative,
+			dump = dump,
 		}
 
 		if alt_key then
@@ -347,12 +369,20 @@ local function parse_db(db)
 				arg = arg:sub(2) -- also swap args?
 			end
 
+
+			if arg == "m64fp" then arg = "m64" end
+			if arg == "m32fp" then arg = "m32" end
+
 			if not util.string_startswith(arg, "<") then
 				table.insert(args, util.string_trim(arg))
 			end
 		end
 
-		do
+		if #args == 0 then
+			for _, name in ipairs(util.string_split(name, "/")) do
+				parse_instruction(name, args, encoding, util.string_split(opcode, " "), metadata, operands)
+			end
+		else
 			local temp = {}
 			local max = 0
 
@@ -378,7 +408,7 @@ local function parse_db(db)
 	end
 end
 
-local js = assert(io.open("x86data.js", "rb") or io.open("../src/x86data.js", "rb")):read("*all")
+local js = assert(io.open("x86data.js", "rb") or io.open("./src/x86data.js", "rb")):read("*all")
 
 local data = js:match("// %$%{JSON:BEGIN%}(.+)// ${JSON:END}")
 data = data:gsub("%/%*.-%*/", "")
@@ -427,7 +457,11 @@ function x86_64.get_typestring(mnemonic, ...)
 			elseif arg.indirect then
 				str[i] = "m" .. x86_64.reginfo[arg.reg].bits
 			else
-				str[i] = "r" .. x86_64.reginfo[arg.reg].bits
+				if x86_64.reginfo[arg.reg].bits == "xmm" then
+					str[i] = "xmm[7:0]"
+				else
+					str[i] = "r" .. x86_64.reginfo[arg.reg].bits
+				end
 			end
 		elseif type(arg) == "number" then
 			str[i] = "i?"
@@ -503,7 +537,6 @@ function x86_64.encode(mnemonic, ...)
 	end
 
 	local data = x86_64.map[mnemonic][typestr]
-
 	local ok, bytes = pcall(data.func, ...)
 
 	if not ok then
@@ -512,12 +545,12 @@ function x86_64.encode(mnemonic, ...)
 
 		local a,b = ...
 		print("op1:")
-		for k,v in pairs(a) do
+		for k,v in pairs(a or {}) do
 			print(k,v)
 		end
 
 		print("op2:")
-		for k,v in pairs(b) do
+		for k,v in pairs(b or {}) do
 			print(k,v)
 		end
 		error(bytes, 2)

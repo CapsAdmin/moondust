@@ -73,6 +73,7 @@ do
 		if type(r) == "number" then
 			l = l:copy()
 			l.disp = r
+			l.scale = l.scale or 1
 			l.indirect = true
 		end
 
@@ -199,7 +200,7 @@ local function check_gas(data)
 		end
 	end
 
-	gas.dump_asm(str, function(bytes) return util.string_binformat(bytes, 15, "  ", true) end, data.bytes, false)
+	print(gas.dump_asm(str, function(bytes) return util.string_binformat(bytes, 15, "  ", true) end, data.bytes, false))
 end
 
 do

@@ -1,10 +1,10 @@
-package.path = package.path .. ";../src/?.lua"
+package.path = package.path .. ";./src/?.lua"
 
 local asm = require("assembler")
 local util = require("util")
 local ffi = require("ffi")
 
-local reg = asm.reg
+local r = asm.reg
 
 local a = asm.assembler()
 
@@ -14,10 +14,10 @@ do
     local STDOUT_FILENO = 1
     local WRITE = 1
 
-    a:mov(reg.rax, WRITE)
-    a:mov(reg.rdi, STDOUT_FILENO)
-    a:mov(reg.rsi, util.object_to_address(msg))
-    a:mov(reg.rdx, #msg)
+    a:mov(r.rax, WRITE)
+    a:mov(r.rdi, STDOUT_FILENO)
+    a:mov(r.rsi, util.object_to_address(msg))
+    a:mov(r.rdx, #msg)
     a:syscall()
 
     a:ret()

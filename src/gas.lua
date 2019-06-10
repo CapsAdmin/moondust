@@ -5,16 +5,14 @@ local gas = {}
 function gas.dump_asm(code, format_func, compare, left_align)
 	local tbl = gas.asm_to_table(code)
 	if tbl then
-		local str = gas.format_table(tbl, nil, format_func, compare, left_align)
-		io.write(str, "\n")
+		return gas.format_table(tbl, nil, format_func, compare, left_align)
 	end
 end
 
 function gas.dump_bin(bin, format_func, compare, left_align)
 	local tbl = gas.bin_to_table(bin)
 	if tbl then
-		local str = gas.format_table(tbl, nil, format_func, compare, left_align)
-		io.write(str, "\n")
+		return gas.format_table(tbl, nil, format_func, compare, left_align)
 	end
 end
 
@@ -36,7 +34,7 @@ function gas.dump_c(code, format_func)
 	local tbl = gas.c_to_table(code)
 	if tbl then
 		local str = gas.format_table(tbl, nil, format_func)
-		io.write(str, "\n")
+		return str
 	end
 end
 

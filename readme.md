@@ -6,7 +6,7 @@ I'm mainly doing this for educational purposes as I've always wanted to learn ho
 
 At the moment it roughly supports 32 and 64 bit general purpose registers, indirect addressing, displacement and scaling.
 
-It looks like this at the moment using the high level wrapper. Syntax resembles intel style using the high level wrapper.
+It looks like this at the moment using the high level wrapper. Syntax resembles intel style.
 
 ```lua
 local asm = require("assembler")
