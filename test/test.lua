@@ -164,7 +164,7 @@ do -- 3*2 double
     check(res[0], "==", 6, "rax should be TARGET")
 end
 
-do -- fpu add 2+3
+do -- left shift
     local a = asm.assembler()
     do
         a:mov(r.rax, 0xa)
@@ -178,6 +178,42 @@ do -- fpu add 2+3
 
     local res = func()
     check(res, "==", 0x28, "rax should be TARGET")
+end
+
+do
+    local a = asm.assembler()
+
+    local x,y,z = 10.5, 23, 123
+
+    local input = ffi.new("double[3]", x,y,z)
+    local output = ffi.new("double[1]", 0)
+
+    do
+        a:movsd(r.xmm0, r(util.object_to_address(input + 0)))
+        a:movsd(r.xmm1, r(util.object_to_address(input + 1)))
+        a:movsd(r.xmm2, r(util.object_to_address(input + 2)))
+
+        a:mulsd(r.xmm0, r.xmm0)
+        a:mulsd(r.xmm1, r.xmm1)
+        a:mulsd(r.xmm2, r.xmm2)
+
+        a:addsd(r.xmm2, r.xmm1)
+        a:addsd(r.xmm1, r.xmm0)
+
+        a:sqrtsd(r.xmm0, r.xmm0)
+
+        a:movsd(r(util.object_to_address(output)), r.xmm0)
+
+        a:ret()
+    end
+
+    local mcode = a:compile()
+
+    local func = ffi.cast("void (*)()", mcode)
+
+    func()
+
+    check(math.sqrt(x*x + y*y + z*z), "==", output[0], "sqrt(x*x + y*y + z*z) should be TARGET")
 end
 
 print("test complete")
