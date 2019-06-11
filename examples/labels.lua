@@ -5,12 +5,13 @@ local util = require("util")
 local ffi = require("ffi")
 
 local mcode = asm.compile(function(a)
-	local msg = "hello world!\n"
+	local msg = "hello world!\n" _G.msg_ref = msg
 
 	local STDOUT_FILENO = 1
-	local WRITE = 1
+	local WRITE = jit.os == "Linux" and 1 or 0x2000004
+	local i = r10
 
-	mov(r12, rdi)
+	mov(i, rdi)
 
 	label("loop") do
 		mov(rax, WRITE)
@@ -18,9 +19,9 @@ local mcode = asm.compile(function(a)
 		mov(rsi, util.object_to_address(msg))
 		mov(rdx, #msg)
 		syscall()
-		inc(r12)
+		inc(i)
 
-		cmp(r12, 10)
+		cmp(i, 10)
 		jne("loop")
 	end
 

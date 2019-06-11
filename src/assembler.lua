@@ -147,30 +147,49 @@ function asm.addr(num)
 	return ffi.cast("void *", num)
 end
 
-if jit.os ~= "Windows" then
-	ffi.cdef[[
-		char *mmap(void *addr, size_t length, int prot, int flags, int fd, long int offset);
-		int munmap(void *addr, size_t length);
-	]]
-
-	local PROT_READ = 0x1 -- Page can be read.
-	local PROT_WRITE = 0x2 -- Page can be written.
-	local PROT_EXEC = 0x4 -- Page can be executed.
-	local PROT_NONE = 0x0 -- Page can not be accessed.
-	local PROT_GROWSDOWN = 0x01000000 -- Extend change to start of growsdown vma (mprotect only).
-	local PROT_GROWSUP = 0x02000000 -- Extend change to start of growsup vma (mprotect only).
-	local MAP_SHARED = 0x01 -- Share changes.
-	local MAP_PRIVATE = 0x02
-	local MAP_ANONYMOUS = 0x20
-
-	function asm.executable_memory(str)
-		local mem = ffi.C.mmap(nil, #str, bit.bor(PROT_READ, PROT_WRITE, PROT_EXEC), bit.bor(MAP_PRIVATE, MAP_ANONYMOUS), -1, 0)
-		ffi.copy(mem, str)
-		return mem
+do
+	ffi.cdef("char *strerror(int errnum);")
+	local function last_error(num)
+		num = num or ffi.errno()
+		local err = ffi.string(ffi.C.strerror(num))
+		return err == "" and tostring(num) or err
 	end
-else
-	function asm.executable_memory(str)
-		error("NYI", 2)
+
+	if jit.os ~= "Windows" then
+		ffi.cdef[[
+			char *mmap(void *addr, size_t length, int prot, int flags, int fd, long int offset);
+			int munmap(void *addr, size_t length);
+		]]
+
+		local PROT_READ = 0x1
+		local PROT_WRITE = 0x2
+		local PROT_EXEC = 0x4 
+
+		local MAP_PRIVATE
+		local MAP_ANONYMOUS
+		
+		if jit.os == "OSX" then
+			MAP_PRIVATE = 0x0002
+			MAP_ANONYMOUS = 0x1000
+		else
+			MAP_PRIVATE = 0x02
+			MAP_ANONYMOUS = 0x20
+		end
+		
+		local MAP_FAILED = ffi.cast("char *", -1)
+
+		function asm.executable_memory(str)
+			local mem = ffi.C.mmap(nil, #str, bit.bor(PROT_READ, PROT_WRITE, PROT_EXEC), bit.bor(MAP_PRIVATE, MAP_ANONYMOUS), -1, 0)
+			if mem == MAP_FAILED then
+				return nil, last_error()
+			end
+			ffi.copy(mem, str)
+			return mem
+		end
+	else
+		function asm.executable_memory(str)
+			return nil, "NYI"
+		end
 	end
 end
 
@@ -287,7 +306,7 @@ do
 			offset = offset + #bytes
 		end
 
-		local mem = asm.executable_memory(str)
+		local mem = assert(asm.executable_memory(str))
 
 		if mem == nil then
 			return nil, "failed to map memory"
