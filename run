@@ -1,5 +1,9 @@
 #!/bin/sh
 
 if [ $1 = "test" ]; then
-    luajit test/test.lua
+    luajit tests/init.lua
+fi
+
+if [ $1 = "build" ]; then
+    luajit build/build.lua
 fi

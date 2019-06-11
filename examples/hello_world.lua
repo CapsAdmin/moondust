@@ -1,8 +1,6 @@
-package.path = package.path .. ";./src/?.lua"
-
-local asm = require("assembler")
-local util = require("util")
 local ffi = require("ffi")
+local asm = require("moondust.assembler")
+local util = require("moondust.util")
 
 local mcode = asm.compile(function(a)
 	local msg = "hello world!\n"

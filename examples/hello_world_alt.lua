@@ -1,8 +1,6 @@
-package.path = package.path .. ";./src/?.lua"
-
-local asm = require("assembler")
-local util = require("util")
 local ffi = require("ffi")
+local asm = require("moondust.assembler")
+local util = require("moondust.util")
 
 local r = asm.reg
 
@@ -11,7 +9,7 @@ local a = asm.assembler()
 do
     local msg = "hello world!\n"
 
-    local STDOUT_FILENO = 1 
+    local STDOUT_FILENO = 1
     local WRITE = jit.os == "Linux" and 1 or 0x2000004
 
     a:mov(r.rax, WRITE)

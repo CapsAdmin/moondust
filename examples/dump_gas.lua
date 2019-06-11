@@ -1,8 +1,6 @@
-package.path = package.path .. ";./src/?.lua"
-
 -- this requires that lua can execute gcc, as and objdump (so typically in a unix envionment with dev tools)
 
-local gas = require("gas")
+local gas = require("moondust.gas")
 
 print(gas.dump_asm("mov [rax + 4], eax"))
 

@@ -1,5 +1,5 @@
 local ffi = require("ffi")
-local x86_64 = require("x86_64")
+local x86_64 = require("moondust.x86_64")
 
 local asm = {}
 
@@ -163,11 +163,11 @@ do
 
 		local PROT_READ = 0x1
 		local PROT_WRITE = 0x2
-		local PROT_EXEC = 0x4 
+		local PROT_EXEC = 0x4
 
 		local MAP_PRIVATE
 		local MAP_ANONYMOUS
-		
+
 		if jit.os == "OSX" then
 			MAP_PRIVATE = 0x0002
 			MAP_ANONYMOUS = 0x1000
@@ -175,7 +175,7 @@ do
 			MAP_PRIVATE = 0x02
 			MAP_ANONYMOUS = 0x20
 		end
-		
+
 		local MAP_FAILED = ffi.cast("char *", -1)
 
 		function asm.executable_memory(str)
