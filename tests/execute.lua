@@ -132,38 +132,56 @@ do -- left shift
     check(res, "==", 0x28, "rax should be TARGET")
 end
 
-do
+local function generic_output(output, assemble)
+    local a = asm.assembler()
+    assemble(a, output)
+
+    local mcode = a:compile()
+    local func = ffi.cast("void (*)()", mcode)
+    func()
+    return output[0]
+end
+
+local function generic_return(assemble)
     local a = asm.assembler()
 
-    local x,y,z = 10.5, 23, 123
-
-    local input = ffi.new("double[3]", x,y,z)
-    local output = ffi.new("double[1]", 0)
-
-    do
-        a:movsd(r.xmm0, r(util.object_to_address(input + 0)))
-        a:movsd(r.xmm1, r(util.object_to_address(input + 1)))
-        a:movsd(r.xmm2, r(util.object_to_address(input + 2)))
-
-        a:mulsd(r.xmm0, r.xmm0)
-        a:mulsd(r.xmm1, r.xmm1)
-        a:mulsd(r.xmm2, r.xmm2)
-
-        a:addsd(r.xmm2, r.xmm1)
-        a:addsd(r.xmm1, r.xmm0)
-
-        a:sqrtsd(r.xmm0, r.xmm0)
-
-        a:movsd(r(util.object_to_address(output)), r.xmm0)
-
-        a:ret()
-    end
+    assemble(a)
 
     local mcode = a:compile()
 
-    local func = ffi.cast("void (*)()", mcode)
+    local func = ffi.cast("uint64_t (*)()", mcode)
 
-    func()
+    return func()
+end
 
-    check(math.sqrt(x*x + y*y + z*z), "==", output[0], "sqrt(x*x + y*y + z*z) should be TARGET")
+local x,y,z = 10.5, 23, 123
+check(math.sqrt(x*x + y*y + z*z), "==", generic_output(ffi.new("double[1]"), function(a, output)
+    local input = ffi.new("double[3]", x,y,z)
+    a:movsd(r.xmm0, r(util.object_to_address(input + 0)))
+    a:movsd(r.xmm1, r(util.object_to_address(input + 1)))
+    a:movsd(r.xmm2, r(util.object_to_address(input + 2)))
+
+    a:mulsd(r.xmm0, r.xmm0)
+    a:mulsd(r.xmm1, r.xmm1)
+    a:mulsd(r.xmm2, r.xmm2)
+
+    a:addsd(r.xmm2, r.xmm1)
+    a:addsd(r.xmm1, r.xmm0)
+
+    a:sqrtsd(r.xmm0, r.xmm0)
+
+    a:movsd(r(util.object_to_address(output)), r.xmm0)
+
+    a:ret()
+end, "sqrt(x*x + y*y + z*z) should be TARGET"))
+
+
+check(1337ull, "==", generic_return(function(a)
+    a:push(ffi.new("uint32_t", 1337))
+    a:pop(r.rax)
+    a:ret()
+end), "should be TARGET")
+
+local function address_of(name)
+    ffi.cdef("void *" .. name) return util.object_to_address(ffi.C[name])
 end

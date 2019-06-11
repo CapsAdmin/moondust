@@ -97,12 +97,24 @@ local ffi = require("ffi")
 
 function util.object_to_address(var)
 	if type(var) == "cdata" or type (var) == "string" then
-		return assert(loadstring("return " .. tostring(ffi.cast("void *", var)):match(": (0x.+)") .. "ULL"))()
+		return ffi.cast("uint64_t", var)
 	end
 
 	return loadstring("return " .. string.format("%p", var) .. "ULL")()
 end
 
+ffi.cdef([[
+	void *dlopen(const char *filename, int flag);
+	char *dlerror(void);
+	void *dlsym(void *handle, const char *symbol);
+	int dlclose(void *handle);
+]])
+
+function util.address_of(name, lib)
+	local handle = ffi.C.dlopen(lib, 1)
+	local ptr = ffi.C.dlsym(handle, name)
+	return util.object_to_address(ptr)
+end
 
 function util.string_readablehex(str)
 	return (str:gsub("(.)", function(str) str = ("%X"):format(str:byte()) if #str == 1 then str = "0" .. str end return str .. " " end))

@@ -72737,7 +72737,7 @@ local map = {
 		},
 	},
 	['lea'] = {
-		['r32,mem'] = {
+		['r32,m32'] = {
 			func = function(op1, op2) return "\x8D"..x86_64.encode_modrm_sib(op1, op2) end,
 			real_operands = {"r32", "mem"},
 			encoding = "RM",
@@ -72745,21 +72745,10 @@ local map = {
 			operands2 = "W:r32, mem",
 			opcode = {"8D", "/r"},
 			metadata = "ANY",
-			operands = {"r32", "mem"},
+			operands = {"r32", "m32"},
 			name = "lea",
 		},
-		['r16,mem'] = {
-			func = function(op1, op2) return "\x67\x8D"..x86_64.encode_modrm_sib(op1, op2) end,
-			real_operands = {"r16", "mem"},
-			encoding = "RM",
-			has_relative = false,
-			operands2 = "w:r16, mem",
-			opcode = {"67", "8D", "/r"},
-			metadata = "ANY",
-			operands = {"r16", "mem"},
-			name = "lea",
-		},
-		['r64,mem'] = {
+		['r64,m64'] = {
 			func = function(op1, op2) return x86_64.encode_rex(true, true, op1.reg and x86_64.reginfo[op1.reg].extra, op2.reg and x86_64.reginfo[op2.reg].extra, op2.index and x86_64.reginfo[op2.index].extra).."\x8D"..x86_64.encode_modrm_sib(op1, op2) end,
 			real_operands = {"r64", "mem"},
 			encoding = "RM",
@@ -72767,7 +72756,18 @@ local map = {
 			operands2 = "W:r64, mem",
 			opcode = {"REX.W", "8D", "/r"},
 			metadata = "X64",
-			operands = {"r64", "mem"},
+			operands = {"r64", "m64"},
+			name = "lea",
+		},
+		['r16,m16'] = {
+			func = function(op1, op2) return "\x67\x8D"..x86_64.encode_modrm_sib(op1, op2) end,
+			real_operands = {"r16", "mem"},
+			encoding = "RM",
+			has_relative = false,
+			operands2 = "w:r16, mem",
+			opcode = {"67", "8D", "/r"},
+			metadata = "ANY",
+			operands = {"r16", "m16"},
 			name = "lea",
 		},
 	},
