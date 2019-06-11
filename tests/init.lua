@@ -1,6 +1,8 @@
 print("running tests..")
 
-loadfile("tests/comparisons.lua")()
+if jit.os ~= "Windows" then
+	loadfile("tests/comparisons.lua")()
+end
 loadfile("tests/execute.lua")()
 
 print("tests ran!")

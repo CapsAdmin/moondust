@@ -187,8 +187,30 @@ do
 			return mem
 		end
 	else
+		ffi.cdef([[
+			void *VirtualAlloc(void *lpAddress, size_t dwSize, uint16_t flAllocationType, uint16_t flProtect);
+			int VirtualProtect(void *lpAddress, size_t dwSize, uint16_t  flNewProtect, uint16_t *lpflOldProtect);
+		]])
+		
+		local PAGE_EXECUTE_READWRITE = 0x40
+		local PAGE_READWRITE = 0x04
+		local MEM_COMMIT = 0x00001000
+
+	
 		function asm.executable_memory(str)
-			return nil, "NYI"
+			local mem = ffi.C.VirtualAlloc(nil, #str, MEM_COMMIT, PAGE_READWRITE)
+			if mem == nil then
+				return nil, "failed to allocate memory"
+			end
+			
+			local temp = ffi.new("uint16_t[1]")
+			if ffi.C.VirtualProtect(mem, #str, PAGE_EXECUTE_READWRITE, temp) == 0 then
+				return nil, "failed to mark memory as executable"
+			end			
+			
+			ffi.copy(mem, str)
+			
+			return mem
 		end
 	end
 end
