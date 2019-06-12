@@ -182,6 +182,15 @@ check(1337ull, "==", generic_return(function(a)
     a:ret()
 end), "should be TARGET")
 
+check(1337ull, "==", generic_return(function(a)
+    a:mov(r.rax, ffi.new("uint64_t", 1337))
+
+    a:jmp("no!")
+        a:mov(r.rax, 777)
+        a:label("no!")
+    a:ret()
+end), "should be TARGET")
+
 local function address_of(name)
     ffi.cdef("void *" .. name) return util.object_to_address(ffi.C[name])
 end
