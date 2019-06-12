@@ -103,17 +103,31 @@ function util.object_to_address(var)
 	return loadstring("return " .. string.format("%p", var) .. "ULL")()
 end
 
-ffi.cdef([[
-	void *dlopen(const char *filename, int flag);
-	char *dlerror(void);
-	void *dlsym(void *handle, const char *symbol);
-	int dlclose(void *handle);
-]])
+do
+	if ffi.os == "Windows" then
+		ffi.cdef([[
+			void *LoadLibraryA(const char *lpLibFileName);
+			void *GetProcAddress(void *hModule, const char* lpProcName);
+		]])
+		function util.address_of(name, lib)
+			local handle = ffi.C.LoadLibraryA(lib)
+			local ptr = ffi.C.GetProcAddress(handle, name)
+			return util.object_to_address(ptr)
+		end
+	else
+		ffi.cdef([[
+			void *dlopen(const char *filename, int flag);
+			char *dlerror(void);
+			void *dlsym(void *handle, const char *symbol);
+			int dlclose(void *handle);
+		]])
 
-function util.address_of(name, lib)
-	local handle = ffi.C.dlopen(lib, 1)
-	local ptr = ffi.C.dlsym(handle, name)
-	return util.object_to_address(ptr)
+		function util.address_of(name, lib)
+			local handle = ffi.C.dlopen(lib, 1)
+			local ptr = ffi.C.dlsym(handle, name)
+			return util.object_to_address(ptr)
+		end
+	end
 end
 
 function util.string_readablehex(str)
