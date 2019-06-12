@@ -17,3 +17,16 @@ print(gas.dump_asm([[
 	mov ebx,0
 	int 0x80
 ]]))
+
+
+print(gas.dump_asm("push 0"))
+
+print(gas.dump_asm("call 0xdeadb"))
+print(gas.dump_c([[
+#include <stdio.h>
+
+int main(void) {
+	//int (*lol)(const char*) = 1;
+	int test = puts("hello world");
+}
+]]))

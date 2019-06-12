@@ -31,7 +31,7 @@ function gas.dump_c(code, format_func)
 		code = template
 	end
 
-	local tbl = gas.c_to_table(code)
+	local tbl = assert(gas.c_to_table(code))
 	if tbl then
 		local str = gas.format_table(tbl, nil, format_func)
 		return str
@@ -123,7 +123,6 @@ local function to_table(str, c_source, execute, raw)
 
 				f:write(str)
 				f:close()
-
 				if not os.execute("gcc -S temp.c") then return nil, "failed to compile C code" end
 			else
 				local f, err = io.open("temp.s", "wb")
@@ -137,7 +136,7 @@ local function to_table(str, c_source, execute, raw)
 			end
 
 			if not os.execute("as -march=generic64 -o temp.o temp.s") then return nil, "failed to assemble temp.S" end
-			if not os.execute("ld -s -o temp temp.o") then return nil, "failed to generate executable from temp.o" end
+			if not os.execute("ld -dynamic-linker /lib64/ld-linux-x86-64.so.2 -lc -s -o temp temp.o") then return nil, "failed to generate executable from temp.o" end
 
 			if execute then
 				os.execute("./temp")
