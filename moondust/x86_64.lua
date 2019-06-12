@@ -44,6 +44,11 @@ do
 				}
 			end
 		end
+
+		x86_64.reginfo["rip"] = {
+			bits = 64,
+			rip = true,
+		}
 	end
 
 	do -- xmm
@@ -108,6 +113,8 @@ function x86_64.encode_modrm_sib(op1, op2)
 	local modrm
 	local sib
 
+	local rip
+
 	if type(op2) == "number" then
 		reg2 = op2
 	else
@@ -117,12 +124,20 @@ function x86_64.encode_modrm_sib(op1, op2)
 		if op2.indirect then
 			base = reg2
 			reg2 = nil
+		end
 
+		if x86_64.reginfo[op2.reg] and x86_64.reginfo[op2.reg].rip then
+			rip = true
 		end
 
 		disp = op2.disp
 		disp_type = "uint32_t"
 		scale = op2.scale
+	end
+
+	if rip then
+		modrm = 0b00111101
+		disp = disp or 0
 	end
 
 	-- mov rcx, rbx
@@ -133,16 +148,18 @@ function x86_64.encode_modrm_sib(op1, op2)
 	end
 
 	--mov rcx, [0xdead]
-	if reg1 and disp and not reg2 and not base and not index and not scale then
+	if reg1 and disp and not reg2 and not base and not index and not scale and not rip then
 		modrm = 0b00000100
 		modrm = bit.bor(modrm, bit.lshift(reg1, 3))
 		sib = 0b00100101
 		disp_type = "uint32_t"
-	elseif reg1 and base and not reg2 and not index and not scale  then
+	elseif reg1 and base and not reg2 and not index and not scale then
 		modrm = bit.bor(bit.lshift(reg1, 3), base)
 	elseif reg1 and base and scale then
 		if index then
 			modrm = 0b10000100
+		elseif rip then
+			modrm = 0b00000101
 		else
 			modrm = 0b00000100
 		end
@@ -241,6 +258,10 @@ local type_translate = {
 }
 
 function x86_64.get_typestring(mnemonic, ...)
+	if not x86_64.map[mnemonic] then
+		return nil, "no such function " .. mnemonic .. "\ndid you mean one of these?\n" .. helper_error(x86_64.map, mnemonic)
+	end
+
 	local str = {}
 	local max = select("#", ...)
 	local lua_number = false
@@ -287,10 +308,6 @@ function x86_64.get_typestring(mnemonic, ...)
 				str[i] = type(arg)
 			end
 		end
-	end
-
-	if not x86_64.map[mnemonic] then
-		return nil, "no such function " .. mnemonic .. "\ndid you mean one of these?\n" .. helper_error(x86_64.map, mnemonic)
 	end
 
 	if lua_number then
