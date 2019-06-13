@@ -77,7 +77,7 @@ local XOP_PREFIX = 0x8F
 
 function x86_64.encode_rex(W, flip, B, R, X)
 	if flip then
-		B,R,X = X,B,R
+		B, R, X = X, B, R
 	end
 
 	local rex = REX_FIXED_BIT -- Fixed base bit pattern
@@ -101,119 +101,134 @@ function x86_64.encode_rex(W, flip, B, R, X)
 	return string.char(rex)
 end
 
-function x86_64.encode_modrm_sib(op1, op2)
-	local reg1 = op1.reg and x86_64.reginfo[op1.reg].index
-	local reg2
-	local index
-	local base
-	local scale
-	local disp
-	local disp_type
-
-	local modrm
-	local sib
-
-	local rip
-
-	if type(op2) == "number" then
-		reg2 = op2
-	else
-		index = x86_64.reginfo[op2.index] and x86_64.reginfo[op2.index].index
-		reg2 = x86_64.reginfo[op2.reg] and x86_64.reginfo[op2.reg].index
-
-		if op2.indirect then
-			base = reg2
-			reg2 = nil
-		end
-
-		if x86_64.reginfo[op2.reg] and x86_64.reginfo[op2.reg].rip then
-			rip = true
-		end
-
-		disp = op2.disp
-		disp_type = "uint32_t"
-		scale = op2.scale
+do
+	local function encode_modrm_reg2reg(a, b)
+		local out = 0b11000000 --11 000 000
+		out = bit.bor(out, a) -- 11 000 a
+		out = bit.bor(out, bit.lshift(b, 3)) -- 11 b a
+		return out
 	end
 
-	if rip then
-		modrm = 0b00111101
-		disp = disp or 0
-	end
+	function x86_64.encode_modrm_sib(op1, op2)
+		local reg1 = op1.reg and x86_64.reginfo[op1.reg].index
+		local reg2
+		local index
+		local base
+		local scale
+		local disp
+		local disp_type
 
-	-- mov rcx, rbx
-	if reg1 and reg2 then
-		modrm = 0b11000000
-		modrm = bit.bor(modrm, reg1)
-		modrm = bit.bor(modrm, bit.lshift(reg2, 3))
-	end
+		local modrm
+		local sib
 
-	--mov rcx, [0xdead]
-	if reg1 and disp and not reg2 and not base and not index and not scale and not rip then
-		modrm = 0b00000100
-		modrm = bit.bor(modrm, bit.lshift(reg1, 3))
-		sib = 0b00100101
-		disp_type = "uint32_t"
-	elseif reg1 and base and not reg2 and not index and not scale then
-		modrm = bit.bor(bit.lshift(reg1, 3), base)
-	elseif reg1 and base and scale then
-		if index then
-			modrm = 0b10000100
-		elseif rip then
-			modrm = 0b00000101
+		local rip
+
+		if type(op2) == "number" then
+			reg2 = op2
 		else
-			modrm = 0b00000100
-		end
+			index = x86_64.reginfo[op2.index] and x86_64.reginfo[op2.index].index
+			reg2 = x86_64.reginfo[op2.reg] and x86_64.reginfo[op2.reg].index
 
-		modrm = bit.bor(modrm, bit.lshift(reg1, 3))
-
-		sib = 0
-
-		if index then
-			sib = bit.bor(sib, base)
-			sib = bit.bor(sib, bit.lshift(index, 3))
-		else
-			sib = bit.bor(sib, 0b101)
-			sib = bit.bor(sib, bit.lshift(base, 3))
-		end
-
-		if scale then
-			sib = sib or 0
-			local pattern = 0b00
-
-			if scale == 1 then
-				pattern = 0b00
-			elseif scale == 2 then
-				pattern = 0b01
-			elseif scale == 4 then
-				pattern = 0b10
-			elseif scale == 8 then
-				pattern = 0b11
-			else
-				error("invalid sib scale: " .. tostring(sib.scale))
+			if op2.indirect then
+				base = reg2
+				reg2 = nil
 			end
 
-			sib = bit.bor(sib, bit.lshift(pattern, 6))
+			if x86_64.reginfo[op2.reg] and x86_64.reginfo[op2.reg].rip then
+				rip = true
+			end
+
+			disp = op2.disp
+			disp_type = "uint32_t"
+			scale = op2.scale
 		end
 
-		disp_type = "uint32_t"
-		disp = disp or 0
+		local DEBUG = false
+
+		if reg1 then
+			if reg2 then
+				modrm = bit.bor(0b11000000, reg1)
+				reg1 = reg2
+			elseif index then
+				modrm = 0b10000100
+			elseif rip then
+				modrm = 0b00000101
+				disp = disp or 0
+			elseif scale or disp then
+				modrm = 0b00000100
+			elseif base then
+				modrm = base
+			end
+
+			modrm = bit.bor(modrm, bit.lshift(reg1, 3))
+
+			if (index or scale or disp) and not rip then
+				sib = 0
+
+				if scale then
+					local pattern = 0b00
+
+					if scale == 1 then
+						pattern = 0b00
+					elseif scale == 2 then
+						pattern = 0b01
+					elseif scale == 4 then
+						pattern = 0b10
+					elseif scale == 8 then
+						pattern = 0b11
+					else
+						error("invalid sib scale: " .. tostring(scale))
+					end
+
+					sib = bit.bor(sib, bit.lshift(pattern, 6))
+				end
+
+				if index then
+					sib = bit.bor(sib, bit.lshift(index, 3), base)
+				else
+					sib = bit.bor(sib, bit.lshift(base or 0b100, 3), 0b101)
+				end
+
+				disp_type = "uint32_t"
+				disp = disp or 0
+			end
+		end
+
+		if DEBUG then
+			print("====")
+			print("op1   = " .. tostring(op1))
+			print("op2   = " .. tostring(op2))
+			if modrm then
+				local s = util.number2binary(modrm, 8)
+				print(string.format("modrm = %s %s %s", s:sub(1, 2), s:sub(3, 5), s:sub(6, 8)))
+			end
+			if sib then
+				local s = util.number2binary(sib, 8)
+				print(string.format("sib   = %s %s %s", s:sub(1, 2), s:sub(3, 5), s:sub(6, 8)))
+			end
+			if disp then
+				print("disp  = " .. tostring(disp))
+			end
+			print("====")
+			--if disp then print("disp = " .. util.number2binary(disp, 8)) end
+		end
+
+		local str = ""
+
+		if modrm then
+			str = str .. string.char(modrm)
+		end
+
+		if sib then
+			str = str .. string.char(sib)
+		end
+
+		if disp then
+			str = str ..x86_64.encode_int(disp_type, disp)
+		end
+
+		return str
 	end
-
-	local str = ""
-
-	if modrm then
-		str = str .. string.char(modrm)
-	end
-
-	if sib then
-		str = str .. string.char(sib)
-	end
-
-	if disp then
-		str = str ..x86_64.encode_int(disp_type, disp)
-	end
-
-	return str
 end
 
 function x86_64.encode_int(t, int)
