@@ -11,7 +11,6 @@ It looks like this at the moment using the high level wrapper. Syntax resembles 
 ```lua
 local ffi = require("ffi")
 local asm = require("moondust.assembler")
-local util = require("moondust.util")
 
 local mcode = asm.compile(function()
 	local msg = "hello world!\n"
@@ -19,7 +18,7 @@ local mcode = asm.compile(function()
 	-- syntax resembles intel style
 	mov(rax, 1) -- WRITE
 	mov(rdi, 1) -- STDOUT
-	mov(rsi, util.object_to_address(msg))
+	mov(rsi, asm.object_to_address(msg))
 	mov(rdx, #msg)
 
 	syscall()

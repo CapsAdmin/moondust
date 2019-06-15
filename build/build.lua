@@ -1,6 +1,16 @@
 io.write("building moondust/x86_64_data.lua")
 io.flush()
 
+
+local function string_startswith(a, b)
+	return a:sub(0, #b) == b
+end
+
+local function string_endswith(a, b)
+	return a:sub(-#b) == b
+end
+
+
 local json = require("build/json")
 local util = require("moondust/util")
 
@@ -62,7 +72,7 @@ local function parse_db(db)
         if opcode[1] == "REX.W" then
             local op2 = ")"
 
-            if operands[2] and (util.string_startswith(operands[2], "r") or util.string_startswith(operands[2], "m")) then
+            if operands[2] and (string_startswith(operands[2], "r") or string_startswith(operands[2], "m")) then
                 op2 = ", op2.reg and x86_64.reginfo[op2.reg].extra, op2.index and x86_64.reginfo[op2.index].extra)"
             end
 
@@ -76,7 +86,7 @@ local function parse_db(db)
                 else
                     table.insert(instr, "x86_64.encode_modrm_sib(op1, op2)")
                 end
-            elseif util.string_startswith(byte, "c") then
+            elseif string_startswith(byte, "c") then
                 local s = byte:sub(2,2)
                 if s == "b" then
                     table.insert(instr, "x86_64.encode_int('int8_t', op"..#operands..")")
@@ -85,9 +95,9 @@ local function parse_db(db)
                 elseif s == "d" then
                     table.insert(instr, "x86_64.encode_int('int32_t', op"..#operands..")")
                 end
-            elseif util.string_startswith(byte, "/") and tonumber(byte:sub(2,2)) then
+            elseif string_startswith(byte, "/") and tonumber(byte:sub(2,2)) then
                 table.insert(instr, "x86_64.encode_modrm_sib(op1, "..byte:sub(2,2)..")")
-            elseif util.string_endswith(byte, "+r") then
+            elseif string_endswith(byte, "+r") then
                 table.insert(instr, "string.char(0x"..byte:sub(1, 2).." + x86_64.reginfo[op1.reg].index)")
             elseif type_translate[type_translate2[byte]] then
                 table.insert(instr, "x86_64.encode_int(\""..type_translate[type_translate2[byte]].."\", op"..#operands..")")
@@ -101,7 +111,7 @@ local function parse_db(db)
         local alt_key
 
         for i, v in ipairs(real_operands) do
-            if util.string_startswith(v, "rel") then
+            if string_startswith(v, "rel") then
                 instr_length = instr_length + tonumber(v:sub(4)) / 8
                 --lua = lua .. "\nop" .. i .. " = op" .. i .. " - " .. instr_length .. "\n"
                 has_relative = true
@@ -139,6 +149,14 @@ local function parse_db(db)
     for i, v in ipairs(db.instructions) do
         local name, operands, encoding, opcode, metadata = unpack(v)
 
+        if operands:find("mem", 1, true) then
+            operands = operands:gsub("mem", "m32/m64")
+        elseif operands:find("m32", 1, true) then
+            operands = operands:gsub("m32", "m32/m64")
+        elseif operands:find("m64", 1, true) then
+            operands = operands:gsub("m64", "m32/m64")
+        end
+
         local args = {}
 
         local tbl = util.string_split(operands, ",")
@@ -152,7 +170,7 @@ local function parse_db(db)
                 arg = arg:sub(3)
             end
 
-            if util.string_startswith(arg, "~") then
+            if string_startswith(arg, "~") then
                 arg = arg:sub(2) -- also swap args?
             end
 
@@ -160,7 +178,7 @@ local function parse_db(db)
             if arg == "m64fp" then arg = "m64" end
             if arg == "m32fp" then arg = "m32" end
 
-            if not util.string_startswith(arg, "<") then
+            if not string_startswith(arg, "<") then
                 table.insert(args, util.string_trim(arg))
             end
         end

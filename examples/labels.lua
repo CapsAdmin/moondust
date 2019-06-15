@@ -1,6 +1,5 @@
 local ffi = require("ffi")
 local asm = require("moondust.assembler")
-local util = require("moondust.util")
 
 local mcode = asm.compile(function(a)
 	local msg = "hello world!\n" _G.msg_ref = msg
@@ -14,7 +13,7 @@ local mcode = asm.compile(function(a)
 	label("loop") do
 		mov(rax, WRITE)
 		mov(rdi, STDOUT_FILENO)
-		mov(rsi, util.object_to_address(msg))
+		mov(rsi, asm.object_to_address(msg))
 		mov(rdx, #msg)
 		syscall()
 		inc(i)

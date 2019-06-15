@@ -116,7 +116,7 @@ do
 		local base
 		local scale
 		local disp
-		local disp_type
+		local disp_type = "uint32_t"
 
 		local modrm
 		local sib
@@ -139,78 +139,71 @@ do
 			end
 
 			disp = op2.disp
-			disp_type = "uint32_t"
 			scale = op2.scale
 		end
 
-		local DEBUG = false
-
-		if reg1 then
-			if reg2 then
-				modrm = bit.bor(0b11000000, reg1)
-				reg1 = reg2
-			elseif index then
-				modrm = 0b10000100
-			elseif rip then
-				modrm = 0b00000101
-				disp = disp or 0
-			elseif scale or disp then
-				modrm = 0b00000100
-			elseif base then
-				modrm = base
-			end
-
-			modrm = bit.bor(modrm, bit.lshift(reg1, 3))
-
-			if (index or scale or disp) and not rip then
-				sib = 0
-
-				if scale then
-					local pattern = 0b00
-
-					if scale == 1 then
-						pattern = 0b00
-					elseif scale == 2 then
-						pattern = 0b01
-					elseif scale == 4 then
-						pattern = 0b10
-					elseif scale == 8 then
-						pattern = 0b11
-					else
-						error("invalid sib scale: " .. tostring(scale))
-					end
-
-					sib = bit.bor(sib, bit.lshift(pattern, 6))
-				end
-
-				if index then
-					sib = bit.bor(sib, bit.lshift(index, 3), base)
-				else
-					sib = bit.bor(sib, bit.lshift(base or 0b100, 3), 0b101)
-				end
-
-				disp_type = "uint32_t"
-				disp = disp or 0
-			end
+		if reg1 and reg2 then
+			reg1, reg2 = reg2, reg1
 		end
 
-		if DEBUG then
-			print("====")
-			print("op1   = " .. tostring(op1))
-			print("op2   = " .. tostring(op2))
-			if modrm then
-				local s = util.number2binary(modrm, 8)
-				print(string.format("modrm = %s %s %s", s:sub(1, 2), s:sub(3, 5), s:sub(6, 8)))
+		local mod = 0b0000000
+		local r = reg1
+		local m = reg2
+
+		if base == 5 then
+			mod = 0b01000000
+			m = base
+			disp = disp or 0
+			if disp < 128 then
+				disp_type = "uint8_t"
+			else
+				mod = 0b10000000
 			end
-			if sib then
-				local s = util.number2binary(sib, 8)
-				print(string.format("sib   = %s %s %s", s:sub(1, 2), s:sub(3, 5), s:sub(6, 8)))
+		elseif reg2 then
+			mod = 0b11000000
+			m = reg2
+		elseif index then
+			mod = 0b10000000
+			m = 0b00000100
+		elseif rip then
+			m = 0b00000101
+			disp = disp or 0
+		elseif scale or disp then
+			m = 0b00000100
+		elseif base then
+			m = base
+		end
+
+		modrm = bit.bor(mod, bit.lshift(r, 3), m)
+
+		if (index or scale or disp) and not rip and base ~= 5 then
+			sib = 0
+
+			if scale then
+				local pattern = 0b00
+
+				if scale == 1 then
+					pattern = 0b00
+				elseif scale == 2 then
+					pattern = 0b01
+				elseif scale == 4 then
+					pattern = 0b10
+				elseif scale == 8 then
+					pattern = 0b11
+				else
+					error("invalid sib scale: " .. tostring(scale))
+				end
+
+				sib = bit.bor(sib, bit.lshift(pattern, 6))
 			end
-			if disp then
-				print("disp  = " .. tostring(disp))
+
+			if index then
+				sib = bit.bor(sib, bit.lshift(index, 3), base)
+			else
+				sib = bit.bor(sib, bit.lshift(base or 0b100, 3), 0b101)
 			end
-			print("====")
-			--if disp then print("disp = " .. util.number2binary(disp, 8)) end
+
+			disp = disp or 0
 		end
 
 		local str = ""
@@ -327,7 +320,7 @@ function x86_64.get_typestring(mnemonic, ...)
 
 	if lua_number then
 		for i, arg in ipairs(str) do
-			if util.string_endswith(arg, "?") then
+			if arg:sub(-1) == "?" then
 				local num = select(i, ...)
 				if type(num) == "table" and num.disp then
 					num = num.disp

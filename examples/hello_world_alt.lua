@@ -1,6 +1,5 @@
 local ffi = require("ffi")
 local asm = require("moondust.assembler")
-local util = require("moondust.util")
 
 local r = asm.reg
 
@@ -14,7 +13,7 @@ do
 
     a:mov(r.rax, WRITE)
     a:mov(r.rdi, STDOUT_FILENO)
-    a:mov(r.rsi, util.object_to_address(msg))
+    a:mov(r.rsi, asm.object_to_address(msg))
     a:mov(r.rdx, #msg)
     a:syscall()
 

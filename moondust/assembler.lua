@@ -191,26 +191,62 @@ do
 			void *VirtualAlloc(void *lpAddress, size_t dwSize, uint16_t flAllocationType, uint16_t flProtect);
 			int VirtualProtect(void *lpAddress, size_t dwSize, uint16_t  flNewProtect, uint16_t *lpflOldProtect);
 		]])
-		
+
 		local PAGE_EXECUTE_READWRITE = 0x40
 		local PAGE_READWRITE = 0x04
 		local MEM_COMMIT = 0x00001000
 
-	
+
 		function asm.executable_memory(str)
 			local mem = ffi.C.VirtualAlloc(nil, #str, MEM_COMMIT, PAGE_READWRITE)
 			if mem == nil then
 				return nil, "failed to allocate memory"
 			end
-			
+
 			local temp = ffi.new("uint16_t[1]")
 			if ffi.C.VirtualProtect(mem, #str, PAGE_EXECUTE_READWRITE, temp) == 0 then
 				return nil, "failed to mark memory as executable"
-			end			
-			
+			end
+
 			ffi.copy(mem, str)
-			
+
 			return mem
+		end
+	end
+
+
+	function asm.object_to_address(var)
+		if type(var) == "cdata" or type (var) == "string" then
+			return ffi.cast("uint64_t", var)
+		end
+
+		return loadstring("return " .. string.format("%p", var) .. "ULL")()
+	end
+
+	do
+		if ffi.os == "Windows" then
+			ffi.cdef([[
+				void *LoadLibraryA(const char *lpLibFileName);
+				void *GetProcAddress(void *hModule, const char* lpProcName);
+			]])
+			function asm.address_of(name, lib)
+				local handle = ffi.C.LoadLibraryA(lib)
+				local ptr = ffi.C.GetProcAddress(handle, name)
+				return asm.object_to_address(ptr)
+			end
+		else
+			ffi.cdef([[
+				void *dlopen(const char *filename, int flag);
+				char *dlerror(void);
+				void *dlsym(void *handle, const char *symbol);
+				int dlclose(void *handle);
+			]])
+
+			function asm.address_of(name, lib)
+				local handle = ffi.C.dlopen(lib, 1)
+				local ptr = ffi.C.dlsym(handle, name)
+				return asm.object_to_address(ptr)
+			end
 		end
 	end
 end

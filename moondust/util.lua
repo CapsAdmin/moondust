@@ -36,14 +36,6 @@ function util.string_split(self, separator, plain_search)
 	return tbl
 end
 
-function util.string_startswith(a, b)
-	return a:sub(0, #b) == b
-end
-
-function util.string_endswith(a, b)
-	return a:sub(-#b) == b
-end
-
 function util.string_trim(self, char)
 	if char then
 		char = char:patternsafe() .. "*"
@@ -93,46 +85,10 @@ function util.string_levenshtein(a, b)
 	return distance[#a][#b]
 end
 
-local ffi = require("ffi")
-
-function util.object_to_address(var)
-	if type(var) == "cdata" or type (var) == "string" then
-		return ffi.cast("uint64_t", var)
-	end
-
-	return loadstring("return " .. string.format("%p", var) .. "ULL")()
-end
-
-do
-	if ffi.os == "Windows" then
-		ffi.cdef([[
-			void *LoadLibraryA(const char *lpLibFileName);
-			void *GetProcAddress(void *hModule, const char* lpProcName);
-		]])
-		function util.address_of(name, lib)
-			local handle = ffi.C.LoadLibraryA(lib)
-			local ptr = ffi.C.GetProcAddress(handle, name)
-			return util.object_to_address(ptr)
-		end
-	else
-		ffi.cdef([[
-			void *dlopen(const char *filename, int flag);
-			char *dlerror(void);
-			void *dlsym(void *handle, const char *symbol);
-			int dlclose(void *handle);
-		]])
-
-		function util.address_of(name, lib)
-			local handle = ffi.C.dlopen(lib, 1)
-			local ptr = ffi.C.dlsym(handle, name)
-			return util.object_to_address(ptr)
-		end
-	end
-end
-
 function util.string_readablehex(str)
 	return (str:gsub("(.)", function(str) str = ("%X"):format(str:byte()) if #str == 1 then str = "0" .. str end return str .. " " end))
 end
+
 function util.string_hexformat(str, chunk_width, row_width, space_separator)
 	row_width = row_width or 4
 	chunk_width = chunk_width or 4

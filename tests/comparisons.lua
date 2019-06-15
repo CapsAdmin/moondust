@@ -7,6 +7,7 @@ local x86_64 = require("moondust.x86_64")
 local asm = require("moondust.assembler")
 local r = asm.reg
 
+
 local function compare(str, name, ...)
     local data = x86_64.encode(name, ...)
 
@@ -18,10 +19,10 @@ local function compare(str, name, ...)
         local info = debug.getinfo(2)
         print(info.source:sub(2) .. ":" .. info.currentline)
         print(str)
+        for k,v in pairs(data.metadata) do print(k,v) end
         print("======================")
     end
 end
-
 
 compare("mov r12, rdi", 				"mov", r.r12, r.rdi)
 compare("mov r12, [0x1]", 				"mov", r.r12, r(0x1))
@@ -58,3 +59,16 @@ compare("call rax",                     "call", r.rax)
 compare("lea rdi, [rip + 0xf * 2]",     "lea", r.rdi, r(r.rip + 0xf * 2))
 compare("lea rdi, [rip + 0xf]",         "lea", r.rdi, r(r.rip + 0xf))
 compare("lea rdi, [rip]",               "lea", r.rdi, r(r.rip))
+
+compare("mov [rbp], ebx",               "mov", r(r.rbp+0), r.ebx)
+compare("mov [rbp+1], ebx",             "mov", r(r.rbp+1), r.ebx)
+compare("mov [rbp+123123], ebx",        "mov", r(r.rbp+123123), r.ebx)
+compare("mov [rbp], ecx",               "mov", r(r.rbp), r.ecx)
+compare("mov [rbp], ebx",               "mov", r(r.rbp+0), r.ebx)
+
+
+-- TODO
+--compare("add QWORD PTR [rbp-1], 2",      "add", r(r.rbp - 1), 2)
+--compare("mov ebx, [eax+1]",               "mov", r.ebx, r(r.eax+1))
+--compare("mov [eax+1], ebx",               "mov", r(r.eax+1), r.ebx)
+--compare("mov [rax+123123], ebx",               "mov", r(r.rax+123123), r.ebx)

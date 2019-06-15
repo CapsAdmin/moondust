@@ -2,7 +2,6 @@ package.path = package.path .. ";./src/?.lua"
 
 local ffi = require("ffi")
 local gas = require("moondust.gas")
-local util = require("moondust.util")
 local x86_64 = require("moondust.x86_64")
 local asm = require("moondust.assembler")
 local r = asm.reg
@@ -26,7 +25,7 @@ do -- 2+5 memory
 
     do
         a:mov(r.rax, 3)
-        a:add(r(util.object_to_address(res)), r.rax)
+        a:add(r(asm.object_to_address(res)), r.rax)
 
         a:ret()
     end
@@ -58,7 +57,7 @@ do -- 2+5 memory with offset
     local res = ffi.new("int[1]", 2)
 
     do
-        a:mov(r.rdx, util.object_to_address(res) - 1024)
+        a:mov(r.rdx, asm.object_to_address(res) - 1024)
 
         a:mov(r.rax, 3)
         a:add(r.rdx + 1024, r.rax)
@@ -78,9 +77,9 @@ do -- 2+5 double
 
     local res = ffi.new("double[1]", 0)
     do
-        a:movsd(r.xmm0, r(util.object_to_address(ffi.new("double[1]", 3))))
-        a:addsd(r.xmm0, r(util.object_to_address(ffi.new("double[1]", 2))))
-        a:movsd(r(util.object_to_address(res)), r.xmm0)
+        a:movsd(r.xmm0, r(asm.object_to_address(ffi.new("double[1]", 3))))
+        a:addsd(r.xmm0, r(asm.object_to_address(ffi.new("double[1]", 2))))
+        a:movsd(r(asm.object_to_address(res)), r.xmm0)
 
         a:ret()
     end
@@ -100,9 +99,9 @@ do -- 3*2 double
 
     local res = ffi.new("double[1]", 0)
     do
-        a:movsd(r.xmm0, r(util.object_to_address(ffi.new("double[1]", 3))))
-        a:mulsd(r.xmm0, r(util.object_to_address(ffi.new("double[1]", 2))))
-        a:movsd(r(util.object_to_address(res)), r.xmm0)
+        a:movsd(r.xmm0, r(asm.object_to_address(ffi.new("double[1]", 3))))
+        a:mulsd(r.xmm0, r(asm.object_to_address(ffi.new("double[1]", 2))))
+        a:movsd(r(asm.object_to_address(res)), r.xmm0)
 
         a:ret()
     end
@@ -157,9 +156,9 @@ end
 local x,y,z = 10.5, 23, 123
 check(math.sqrt(x*x + y*y + z*z), "==", generic_output(ffi.new("double[1]"), function(a, output)
     local input = ffi.new("double[3]", x,y,z)
-    a:movsd(r.xmm0, r(util.object_to_address(input + 0)))
-    a:movsd(r.xmm1, r(util.object_to_address(input + 1)))
-    a:movsd(r.xmm2, r(util.object_to_address(input + 2)))
+    a:movsd(r.xmm0, r(asm.object_to_address(input + 0)))
+    a:movsd(r.xmm1, r(asm.object_to_address(input + 1)))
+    a:movsd(r.xmm2, r(asm.object_to_address(input + 2)))
 
     a:mulsd(r.xmm0, r.xmm0)
     a:mulsd(r.xmm1, r.xmm1)
@@ -170,7 +169,7 @@ check(math.sqrt(x*x + y*y + z*z), "==", generic_output(ffi.new("double[1]"), fun
 
     a:sqrtsd(r.xmm0, r.xmm0)
 
-    a:movsd(r(util.object_to_address(output)), r.xmm0)
+    a:movsd(r(asm.object_to_address(output)), r.xmm0)
 
     a:ret()
 end, "sqrt(x*x + y*y + z*z) should be TARGET"))
@@ -192,5 +191,5 @@ check(1337ull, "==", generic_return(function(a)
 end), "should be TARGET")
 
 local function address_of(name)
-    ffi.cdef("void *" .. name) return util.object_to_address(ffi.C[name])
+    ffi.cdef("void *" .. name) return asm.object_to_address(ffi.C[name])
 end
