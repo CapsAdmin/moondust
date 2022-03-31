@@ -357,7 +357,7 @@ function x86_64.encode(mnemonic, ...)
 	local typestr, err = x86_64.get_typestring(mnemonic, ...)
 
 	if not typestr then
-		error(err, 2)
+		error(err, 3)
 	end
 
 	if x86_64.pre_encode then
