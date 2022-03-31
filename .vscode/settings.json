@@ -1,0 +1,15 @@
+{
+  "triggerTaskOnSave.tasks": {
+    "onsave": [
+      "examples/**/*.lua",
+      "moondust/**/*.lua",
+      "tests/**/*.lua",
+      "test_focus.lua"
+    ]
+  },
+  "search.exclude": {
+    "moondust/x86_64_data.lua": true,
+    "build/x86data.js": true,
+    "build/json.lua": true
+  }
+}
