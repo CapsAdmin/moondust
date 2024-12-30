@@ -1,399 +1,511 @@
-local ffi = require("ffi")
-local util = require("moondust.util")
+return function(Assembler) -- x64_86
+	local reginfo = {}
 
-
-local x86_64 = {}
-
-_G.x86_64 = x86_64
-x86_64.map = require("moondust.x86_64_data")
-_G.x86_64 = nil
-
-do
-	x86_64.reginfo = {}
-
-	do -- integers
-		local base = {
-			"ax", "cx", "dx", "bx",
-			"sp", "bp", "si", "di",
-		}
-
-		for _, bit in ipairs({64, 32, 16, 8}) do
-			local tbl = {}
-
-			if bit == 64 then
-				for i, v in ipairs(base) do tbl[i] = "r" .. v; tbl[i + 7 + 1] = "r" .. (i+7) end
-			elseif bit == 32 then
-				for i, v in ipairs(base) do tbl[i] = "e" .. v; tbl[i + 7 + 1] = "r" .. (i+7) .. "d" end
-			elseif bit == 16 then
-				for i, v in ipairs(base) do tbl[i] = v; tbl[i + 7 + 1] = "r" .. (i+7) .. "w" end
-			else
-				tbl = {
-					"al", "cl", "dl","bl",
-					"ah", "ch", "dh", "bh",
-					"spl", "bpl", "sil", "dil",
-					"r8b", "r9b", "r10b", "r11b",
-					"r12b", "r13b", "r14b", "r15b",
-				}
-			end
-
-			for i, reg in ipairs(tbl) do
-				x86_64.reginfo[reg] = {
-					bits = bit,
-					extra = i > 8,
-					index = (i - 1)%8,
-				}
-			end
-		end
-
-		x86_64.reginfo["rip"] = {
+	-- Standard registers
+	for i, name in ipairs({"ax", "cx", "dx", "bx", "sp", "bp", "si", "di"}) do
+		reginfo["r" .. name] = {
 			bits = 64,
-			rip = true,
+			extra = false,
+			index = i - 1,
+		}
+		reginfo["e" .. name] = {
+			bits = 32,
+			extra = false,
+			index = i - 1,
 		}
 	end
 
-	do -- xmm
-		for i = 0, 15 do
-			x86_64.reginfo["xmm" .. i] = {
-				bits = "xmm",
-				extra = i > 8,
-				index = i%8,
+	-- r8-r15
+	for i = 8, 15 do
+		reginfo["r" .. i] = {
+			bits = 64,
+			extra = true,
+			index = i - 8,
+		}
+	end
+
+	-- r8d-r15d
+	for i = 8, 15 do
+		reginfo["r" .. i .. "d"] = {
+			bits = 32,
+			extra = true,
+			index = i - 8,
+		}
+	end
+
+	-- SIMD registers
+	local simd_classes = {
+		xmm = {count = 16, width = 128}, -- SSE
+		ymm = {count = 16, width = 256}, -- AVX/AVX2
+		zmm = {count = 32, width = 512}, -- AVX-512
+	}
+
+	for class, info in pairs(simd_classes) do
+		for i = 0, info.count - 1 do
+			reginfo[class .. i] = {
+				bits = info.width,
+				extra = i > 7,
+				index = i % 8,
+				class = "simd",
+				width = info.width,
 			}
 		end
 	end
-end
 
-
-local REX_FIXED_BIT = 0b01000000
-local REX = {
-	W = 0b00001000, -- 64bit mode
-	R = 0b00000100, -- r8-r15
-	X = 0b00000010, -- r8-r15
-	B = 0b00000001, -- r8-r15
-}
-
-local VEX_2_BYTES_PREFIX = 0xC5
-local VEX_3_BYTES_PREFIX = 0xC4
-local XOP_PREFIX = 0x8F
-
-function x86_64.encode_rex(W, flip, B, R, X)
-	if flip then
-		B, R, X = X, B, R
+	-- AVX-512 mask registers
+	for i = 0, 7 do
+		reginfo["k" .. i] = {bits = 64, extra = false, index = i, class = "mask"}
 	end
 
-	local rex = REX_FIXED_BIT -- Fixed base bit pattern
+	-- RIP for RIP-relative addressing
+	reginfo.rip = {bits = 64, rip = true, class = "ip"}
 
-	if W then
-		rex = bit.bor(rex, REX.W)
-	end
+	local function IS_REG(val)
+		if type(val) == "string" and reginfo[val] then return true end
 
-	if R then
-		rex = bit.bor(rex, REX.R)
-	end
-
-	if X then
-		rex = bit.bor(rex, REX.X)
-	end
-
-	if B then
-		rex = bit.bor(rex, REX.B)
-	end
-
-	return string.char(rex)
-end
-
-do
-	local function encode_modrm_reg2reg(a, b)
-		local out = 0b11000000 --11 000 000
-		out = bit.bor(out, a) -- 11 000 a
-		out = bit.bor(out, bit.lshift(b, 3)) -- 11 b a
-		return out
-	end
-
-	function x86_64.encode_modrm_sib(op1, op2)
-		local reg1 = op1.reg and x86_64.reginfo[op1.reg].index
-		local reg2
-		local index
-		local base
-		local scale
-		local disp
-		local disp_type = "uint32_t"
-
-		local modrm
-		local sib
-
-		local rip
-
-		if type(op2) == "number" then
-			reg2 = op2
-		else
-			index = x86_64.reginfo[op2.index] and x86_64.reginfo[op2.index].index
-			reg2 = x86_64.reginfo[op2.reg] and x86_64.reginfo[op2.reg].index
-
-			if op2.indirect then
-				base = reg2
-				reg2 = nil
-			end
-
-			if x86_64.reginfo[op2.reg] and x86_64.reginfo[op2.reg].rip then
-				rip = true
-			end
-
-			disp = op2.disp
-			scale = op2.scale
+		if type(val) == "table" and val.reg and reginfo[val.reg] then
+			return true
 		end
 
-		if reg1 and reg2 then
-			reg1, reg2 = reg2, reg1
+		if type(val) == "table" and val.index and reginfo[val.index] then
+			return true
 		end
 
-		local mod = 0b0000000
-		local r = reg1
-		local m = reg2
+		return false
+	end
 
-		if base == 5 then
-			mod = 0b01000000
-			m = base
-			disp = disp or 0
-			if disp < 128 then
-				disp_type = "uint8_t"
-			else
-				mod = 0b10000000
+	local function REG(val)
+		if type(val) == "string" then
+			if not reginfo[val] then error(val .. " is not a valid register", 2) end
+
+			local new = {reg = val}
+
+			for k, v in pairs(reginfo[val]) do
+				new[k] = v
 			end
-		elseif reg2 then
-			mod = 0b11000000
-			m = reg2
-		elseif index then
-			mod = 0b10000000
-			m = 0b00000100
-		elseif rip then
-			m = 0b00000101
-			disp = disp or 0
-		elseif scale or disp then
-			m = 0b00000100
-		elseif base then
-			m = base
+
+			return new
+		elseif type(val) == "table" then
+			if not reginfo[val.reg] and not reginfo[val.index] then
+				error(
+					"field 'reg' or 'index' in val (" .. tostring(val.index or val.reg) .. ") is not a valid register",
+					2
+				)
+			end
+
+			local new = {reg = val.reg, index = val.index}
+
+			for k, v in pairs(reginfo[val.reg or val.index]) do
+				new[k] = v
+			end
+
+			for k, v in pairs(val) do
+				new[k] = v
+			end
+
+			return new
+		end
+	end
+
+	do
+		function Assembler:rex(W, B, R, X)
+			local rex = 0b01000000 -- Fixed REX prefix
+			if W then rex = bit.bor(rex, 0b00001000) end -- 64-bit operand
+			if R then rex = bit.bor(rex, 0b00000100) end -- Extension of ModR/M reg field
+			if X then rex = bit.bor(rex, 0b00000010) end -- Extension of SIB index field
+			if B then rex = bit.bor(rex, 0b00000001) end -- Extension of ModR/M r/m, SIB base, or opcode reg field
+			return self:emit(rex)
 		end
 
-		modrm = bit.bor(mod, bit.lshift(r, 3), m)
+		do
+			local function log2(n)
+				local result = 0
 
-		if (index or scale or disp) and not rip and base ~= 5 then
-			sib = 0
-
-			if scale then
-				local pattern = 0b00
-
-				if scale == 1 then
-					pattern = 0b00
-				elseif scale == 2 then
-					pattern = 0b01
-				elseif scale == 4 then
-					pattern = 0b10
-				elseif scale == 8 then
-					pattern = 0b11
-				else
-					error("invalid sib scale: " .. tostring(scale))
+				while n > 1 do
+					n = n / 2
+					result = result + 1
 				end
 
-				sib = bit.bor(sib, bit.lshift(pattern, 6))
+				return result
 			end
 
-			if index then
-				sib = bit.bor(sib, bit.lshift(index, 3), base)
-			else
-				sib = bit.bor(sib, bit.lshift(base or 0b100, 3), 0b101)
+			local function encode_modrm(mod, reg, rm)
+				-- mod: 2 bits (00, 01, 10, 11)
+				-- reg: 3 bits (000-111)
+				-- rm:  3 bits (000-111)
+				return bit.bor(
+					bit.lshift(bit.band(mod, 0x3), 6),
+					bit.lshift(bit.band(reg, 0x7), 3),
+					bit.band(rm, 0x7)
+				)
 			end
 
-			disp = disp or 0
-		end
+			local function encode_sib(scale, index, base)
+				-- scale: 2 bits (00=1, 01=2, 10=4, 11=8)
+				-- index: 3 bits (000-111)
+				-- base:  3 bits (000-111)
+				return bit.bor(
+					bit.lshift(bit.band(scale, 0x3), 6),
+					bit.lshift(bit.band(index, 0x7), 3),
+					bit.band(base, 0x7)
+				)
+			end
 
-		local str = ""
+			function Assembler:emit_modrm_sib(op1, op2)
+				op1 = REG(op1)
+				op2 = REG(op2)
+				local reg1 = op1.reg and reginfo[op1.reg].index
+				local reg2 = op2.reg and reginfo[op2.reg].index
+				local index = IS_REG(op2.index) and REG(op2.index).index
+				local scale = op2.scale
+				local disp = op2.disp
+				local indirect = op2.indirect
 
-		if modrm then
-			str = str .. string.char(modrm)
-		end
-
-		if sib then
-			str = str .. string.char(sib)
-		end
-
-		if disp then
-			str = str ..x86_64.encode_int(disp_type, disp)
-		end
-
-		return str
-	end
-end
-
-function x86_64.encode_int(t, int)
-	if type(int) == "cdata" then
-		int = ffi.cast(t, int)
-	elseif type(int) == "number" then
-		int = ffi.new(t, int)
-	end
-
-	return ffi.string(ffi.new(t.."[1]", int), ffi.sizeof(t))
-end
-
-local function helper_error(tbl, str)
-	local candidates = {}
-
-	for key in pairs(tbl) do
-		table.insert(candidates, {key = key, score = util.string_levenshtein(key, str)})
-	end
-
-	table.sort(candidates, function(a, b) return a.score < b.score end)
-
-	local found = ""
-	for i = 1, 5 do
-		if candidates[i] then
-			found = found  .. "\t" .. candidates[i].key .. "\n"
-		end
-	end
-
-	return found
-end
-
-local type_translate = {
-	i8 = "int8_t",
-	i16 = "int16_t",
-	i32 = "int32_t",
-	i64 = "int64_t",
-
-	u8 = "uint8_t",
-	u16 = "uint16_t",
-	u32 = "uint32_t",
-	u64 = "uint64_t",
-}
-
-function x86_64.get_typestring(mnemonic, ...)
-	if not x86_64.map[mnemonic] then
-		return nil, "no such function " .. mnemonic .. "\ndid you mean one of these?\n" .. helper_error(x86_64.map, mnemonic)
-	end
-
-	local str = {}
-	local max = select("#", ...)
-	local lua_number = false
-	local lua_address = false
-
-	for i = 1, max do
-		local arg = select(i, ...)
-
-		local found = false
-
-		if type(arg) == "table" and (arg.reg or arg.disp or arg.base) then
-			if not arg.reg and not arg.base then
-				if type(arg.disp) == "cdata" then
-					local size = ffi.sizeof(arg.disp) * 8
-					str[i] = "m" .. size
-				else
-					str[i] = "m?"
-					lua_number = true
+				-- Handle register-to-register
+				if not indirect and reg1 and reg2 then
+					-- ModRM: mod=11, reg=reg1, rm=reg2
+					self:emit(encode_modrm(3, reg1, reg2))
+					return
 				end
-			elseif arg.indirect then
-				str[i] = "m" .. x86_64.reginfo[arg.reg].bits
-			else
-				if x86_64.reginfo[arg.reg].bits == "xmm" then
-					str[i] = "xmm[7:0]"
-				else
-					str[i] = "r" .. x86_64.reginfo[arg.reg].bits
-				end
-			end
-		elseif type(arg) == "number" then
-			str[i] = "i?"
-			lua_number = true
-		else
-			local found = false
-			if type(arg) == "cdata" then
-				for k,v in pairs(type_translate) do
-					if ffi.istype(v, arg) then
-						str[i] = k
-						found = true
-						break
+
+				-- Handle indirect memory access
+				if indirect and reg2 then
+					if disp == nil then
+						-- [reg] - no displacement
+						self:emit(encode_modrm(0, reg1, reg2))
+					elseif disp >= -128 and disp <= 127 then
+						-- [reg + disp8]
+						self:emit(encode_modrm(1, reg1, reg2))
+						self:emit_i8(disp)
+					else
+						-- [reg + disp32]
+						self:emit(encode_modrm(2, reg1, reg2))
+						self:emit_i32(disp)
 					end
-				end
-			end
-			if not found then
-				str[i] = type(arg)
-			end
-		end
-	end
 
-	if lua_number then
-		for i, arg in ipairs(str) do
-			if arg:sub(-1) == "?" then
-				local num = select(i, ...)
-				if type(num) == "table" and num.disp then
-					num = num.disp
+					return
 				end
 
-				for _, bits in ipairs({"8", "16", "32", "64"}) do
-					str[i] = arg:sub(0, 1) .. bits
-					local test = table.concat(str, ",")
+				-- Handle SIB cases (scaled index, with or without base)
+				if index or op2.scale then
+					-- Calculate scale bits (00=1, 01=2, 10=4, 11=8)
+					local scale_bits = 0
 
-					if bits == "8" and num > -128 and num < 128 and x86_64.map[mnemonic][test] then
-						break
-					elseif bits == "16" and num > -13824 and num < 13824 and x86_64.map[mnemonic][test] then
-						break
-					elseif bits == "32" and num > -2147483648 and num < 2147483648 and x86_64.map[mnemonic][test] then
-						break
-					elseif x86_64.map[mnemonic][test] then
-						break
+					if scale == 2 then
+						scale_bits = 1
+					elseif scale == 4 then
+						scale_bits = 2
+					elseif scale == 8 then
+						scale_bits = 3
 					end
+
+					-- Get base register if specified
+					local base = op2.base and reginfo[op2.base].index or 5 -- 5 = no base
+					-- ModRM byte: mod=00/01/10 (depending on displacement), reg=reg1, rm=100 (SIB follows)
+					local mod = 0
+
+					if disp then mod = (disp >= -128 and disp <= 127) and 1 or 2 end
+
+					self:emit(encode_modrm(mod, reg1, 4)) -- 4 = 0b100 indicates SIB follows
+					-- SIB byte: scale=scale_bits, index=index register, base=base register
+					local idx = index or 4 -- 4 = 0b100 means no index
+					self:emit(encode_sib(scale_bits, idx, base))
+
+					-- Emit displacement
+					if disp then
+						if mod == 1 then
+							self:emit_i8(disp)
+						else
+							self:emit_i32(disp)
+						end
+					elseif base == 5 then
+						-- When no base register or base is [rbp+disp], we need a 32-bit displacement
+						self:emit_i32(0)
+					end
+
+					return
+				end
+
+				-- Handle RIP-relative addressing
+				if op2.reg == "rip" then
+					self:emit(encode_modrm(0, reg1, 5)) -- ModRM: mod=00, reg=reg1, rm=101
+					self:emit_i32(disp or 0)
+					return
 				end
 			end
 		end
 	end
 
-	str = table.concat(str, ",")
-
-	if not x86_64.map[mnemonic][str] then
-		return nil, mnemonic .. " does not take arguments " .. str .. "\ndid you mean one of these?\n" .. helper_error(x86_64.map[mnemonic], str)
+	function Assembler:ret()
+		self:emit(0xC3)
 	end
 
-	return str
+	function Assembler:mov_imm_to_reg(op1, op2, signed)
+		local reg = REG(op1)
+		assert(tonumber(op2))
+		local imm = op2
+
+		if reg.class == "simd" then
+			-- For SSE registers, we need to:
+			-- 1. Store the immediate value in memory
+			-- 2. Move it into the XMM register
+			-- Save rax if we need it
+			self:push("rax")
+
+			-- Move immediate to memory via rax
+			if reg.width == 128 then -- XMM registers
+				self:rex(true, false, false, false)
+				self:emit(0x0F, 0x28, 0xC0 + reg.index)
+			end
+
+			-- Restore rax
+			self:pop("rax")
+		elseif reg.bits == 64 then
+			-- Moving 64-bit immediate to 64-bit register
+			self:rex(true, reg.extra, false, false)
+			self:emit(0xB8 + reg.index)
+
+			if signed then self:emit_i64(imm) else self:emit_u64(imm) end
+		elseif reg.bits == 32 then
+			if reg.extra then self:rex(false, reg.extra, false, false) end
+
+			self:emit(0xB8 + reg.index)
+
+			if signed then self:emit_i32(imm) else self:emit_u32(imm) end
+		end
+	end
+
+	function Assembler:mov_reg_to_reg(op1, op2)
+		local reg1 = REG(op1)
+		local reg2 = REG(op2)
+
+		if reg1.class == "simd" and reg2.class == "simd" then
+			if reg1.extra or reg2.extra then
+				self:rex(false, reg1.extra, reg2.extra, false)
+			end
+
+			self:emit(0x0F, 0x28) -- MOVAPS
+			self:emit_modrm_sib(reg2, reg1)
+		elseif reg1.bits == 64 then
+			self:rex(true, reg1.extra, reg2.extra, false)
+			self:emit(0x89)
+			self:emit_modrm_sib(reg2, reg1)
+		end
+	end
+
+	-- Refactored mov_reg_to_pointer
+	function Assembler:mov_reg_to_pointer(reg, ptr)
+		local reg = REG(reg)
+
+		if reg.class == "simd" then
+			if reg ~= "rcx" then self:push("rcx") end
+
+			self:mov("rcx", ptr)
+
+			if reg.extra then self:rex(false, reg.extra, false, false) end
+
+			self:emit(0x0F, 0x29) -- MOVAPS store
+			self:emit_modrm_sib(reg, {reg = "rcx", indirect = true})
+
+			if reg ~= "rcx" then self:pop("rcx") end
+		elseif reg.bits == 64 then
+			if reg ~= "rcx" then self:push("rcx") end
+
+			self:mov("rcx", ptr)
+			self:rex(true, reg.extra, false, false)
+			self:emit(0x89)
+			self:emit_modrm_sib(reg, {reg = "rcx", indirect = true})
+
+			if reg ~= "rcx" then self:pop("rcx") end
+		end
+	end
+
+	function Assembler:mov_pointer_to_reg(reg, ptr)
+		local reg1 = REG(reg)
+
+		if reg1.class == "simd" then
+			if reg ~= "rcx" then self:push("rcx") end
+
+			self:mov("rcx", ptr)
+
+			if reg1.extra then self:rex(false, reg1.extra, false, false) end
+
+			self:emit(0x0F)
+			self:emit(0x28) -- MOVAPS load
+			self:emit_modrm_sib(reg, {reg = "rcx", indirect = true})
+
+			if reg ~= "rcx" then self:pop("rcx") end
+		elseif reg1.bits == 64 then
+			if reg == "rcx" then self:push("rcx") end
+
+			self:mov("rcx", ptr)
+			self:rex(true, reg1.extra, false, false)
+			self:emit(0x8B)
+			self:emit_modrm_sib(reg, {reg = "rcx", indirect = true})
+
+			if reg == "rcx" then self:pop("rcx") end
+		end
+	end
+
+	function Assembler:mov(op1, op2, signed)
+		if IS_REG(op1) and tonumber(op2) then
+			self:mov_imm_to_reg(op1, op2, signed)
+		elseif IS_REG(op1) and IS_REG(op2) then
+			self:mov_reg_to_reg(op1, op2)
+		else
+			error("invalid arguments", 2)
+		end
+	end
+
+	function Assembler:push(op)
+		-- If op is a register
+		local reg = REG(op)
+
+		-- Handle 64-bit registers
+		if reg.bits == 64 then
+			-- Check if we need REX prefix for r8-r15
+			if reg.extra then self:rex(false, reg.extra, false, false) end
+
+			-- Base opcode for push is 0x50 + register index
+			self:emit(0x50 + reg.index)
+		else
+			error("push only supports 64-bit registers")
+		end
+	end
+
+	function Assembler:pop(op)
+		local reg = REG(op)
+
+		-- Handle 64-bit registers
+		if reg.bits == 64 then
+			-- Check if we need REX prefix for r8-r15
+			if reg.extra then self:rex(false, reg.extra, false, false) end
+
+			-- Base opcode for pop is 0x58 + register index
+			self:emit(0x58 + reg.index)
+		else
+			error("pop only supports 64-bit registers")
+		end
+	end
+
+	function Assembler:syscall()
+		self:emit(0x0F, 0x05)
+	end
+
+	do --sse
+		-- Add SSE instructions to the Assembler
+		function Assembler:movaps(op1, op2)
+			local dst = REG(op1)
+			local src = REG(op2)
+			assert(dst.class == "simd" and src.class == "simd", "movaps requires SSE registers")
+
+			if dst.extra or src.extra then
+				self:rex(false, src.extra, dst.extra, false)
+			end
+
+			self:emit(0x0F, 0x28)
+			self:emit_modrm_sib(dst, src)
+		end
+
+		function Assembler:movaps_load(dest_reg, src_mem)
+			local reg = REG(dest_reg)
+			assert(reg.class == "simd", "movaps requires SSE register as destination")
+
+			if reg.extra then self:rex(false, false, reg.extra, false) end
+
+			self:emit(0x0F, 0x28)
+			self:emit_modrm_sib(dest_reg, {reg = "rax", indirect = true})
+		end
+
+		function Assembler:movaps_store(dest_mem, src_reg)
+			local reg = REG(src_reg)
+			assert(reg.class == "simd", "movaps requires SSE register as source")
+
+			if reg.extra then self:rex(false, false, reg.extra, false) end
+
+			self:emit(0x0F, 0x29)
+			self:emit_modrm_sib(src_reg, {reg = "rax", indirect = true})
+		end
+
+		function Assembler:movdqu(op1, op2)
+			local reg1 = REG(op1)
+			local reg2 = REG(op2)
+			assert(reg1.class == "simd" and reg2.class == "simd", "movdqu requires SSE registers")
+
+			if reg1.extra or reg2.extra then
+				self:rex(false, reg1.extra, reg2.extra, false)
+			end
+
+			self:emit(0xF3, 0x0F, 0x6F)
+			self:emit_modrm_sib(reg2, reg1)
+		end
+
+		function Assembler:addps(op1, op2)
+			local reg1 = REG(op1)
+			local reg2 = REG(op2)
+			assert(reg1.class == "simd" and reg2.class == "simd", "addps requires SSE registers")
+
+			if reg1.extra or reg2.extra then
+				self:rex(false, reg1.extra, reg2.extra, false)
+			end
+
+			self:emit(0x0F, 0x58)
+			self:emit_modrm_sib(reg2, reg1)
+		end
+
+		function Assembler:mulps(op1, op2)
+			local reg1 = REG(op1)
+			local reg2 = REG(op2)
+			assert(reg1.class == "simd" and reg2.class == "simd", "mulps requires SSE registers")
+
+			if reg1.extra or reg2.extra then
+				self:rex(false, reg1.extra, reg2.extra, false)
+			end
+
+			self:emit(0x0F, 0x59)
+			self:emit_modrm_sib(reg2, reg1)
+		end
+	end
+
+	-- AVX store operations for the Assembler
+	do
+		function Assembler:vmovaps(op1, op2)
+			local dst = REG(op1)
+			local src = REG(op2)
+			assert(dst.class == "simd" and src.class == "simd", "vmovaps requires AVX registers")
+			self:emit(0xC5, 0xFC, 0x28)
+			self:emit_modrm_sib(dst, src)
+		end
+
+		function Assembler:vmovaps_store(dest_mem, src_reg)
+			local reg = REG(src_reg)
+			assert(reg.class == "simd", "vmovaps requires AVX register as source")
+			self:emit(0xC5, 0xFC, 0x29)
+			self:emit_modrm_sib(reg, {reg = "rax", indirect = true})
+		end
+
+		function Assembler:vmovups(op1, op2)
+			local dst = REG(op1)
+			local src = REG(op2)
+			assert(dst.class == "simd" and src.class == "simd", "vmovups requires AVX registers")
+			self:emit(0xC5, 0xFC, 0x10)
+			self:emit_modrm_sib(dst, src)
+		end
+
+		function Assembler:vmovups_load(dest_reg, src_mem)
+			local reg = REG(dest_reg)
+			assert(reg.class == "simd", "vmovups requires AVX register as destination")
+			self:emit(0xC5, 0xFC, 0x10)
+			self:emit_modrm_sib(dest_reg, {reg = "rax", indirect = true} -- Load from memory pointed by rax
+			)
+		end
+
+		function Assembler:vmovups_store(dest_mem, src_reg)
+			local reg = REG(src_reg)
+			assert(reg.class == "simd", "vmovups requires AVX register as source")
+			self:emit(0xC5, 0xFC, 0x11)
+			self:emit_modrm_sib(src_reg, {reg = "rax", indirect = true} -- Store to memory pointed by rax
+			)
+		end
+	end
 end
-
-function x86_64.encode(mnemonic, ...)
-	local typestr, err = x86_64.get_typestring(mnemonic, ...)
-
-	if not typestr then
-		error(err, 3)
-	end
-
-	if x86_64.pre_encode then
-		local res = x86_64.pre_encode(mnemonic, typestr, ...)
-		if res ~= nil then
-			return res
-		end
-	end
-
-	local data = x86_64.map[mnemonic][typestr]
-	local ok, bytes = pcall(data.func, ...)
-
-	if not ok then
-		print(data.lua)
-		print(...)
-
-		local a,b = ...
-		print("op1:")
-		for k,v in pairs(a or {}) do
-			print(k,v)
-		end
-
-		print("op2:")
-		for k,v in pairs(b or {}) do
-			print(k,v)
-		end
-		error(bytes, 2)
-	end
-
-	return {
-		name = mnemonic,
-		bytes = bytes,
-		arg_types = typestr,
-		args = {...},
-		metadata = data,
-	}
-end
-
-return x86_64
