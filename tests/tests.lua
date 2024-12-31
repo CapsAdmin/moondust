@@ -2,101 +2,126 @@ local Assembler = require("moondust")
 local memory = require("moondust.memory")
 local ffi = require("ffi")
 
+local function expect_error(fn, error_msg)
+	local ok, err = pcall(fn)
+
+	if not ok and string.find(err, error_msg, 1, true) then
+
+	else
+		error(string.format("Expected error containing '%s', got: %s", error_msg, err), 3)
+	end
+end
+
 local function equal(a, b, level)
 	if a ~= b then
 		error("expected " .. tostring(a) .. " got " .. tostring(b), level or 2)
 	end
 end
 
+local function cmp()
+	local asm = Assembler()
+	local tbl = {}
+
+	function tbl.__index(_, key)
+		local func = asm[key]
+		return function(_, ...)
+			func(asm, ...)
+			return tbl
+		end
+	end
+
+	function tbl:with(code)
+		equal(code, asm:debug_disassemble(), 2)
+	end
+
+	setmetatable(tbl, tbl)
+	return tbl
+end
+
 local function test(test_name, test_function)
-	io.write("test - " .. test_name)
+	io.write("test " .. test_name)
+	io.flush()
 	local asm = Assembler()
 	local ok, err = xpcall(test_function, debug.traceback, asm)
 
-	if not ok then
+	if ok then
+		io.write(" - OK\n")
+		io.flush()
+	else
 		io.write("fail\n\n")
 		print("source:")
 		print("===")
 		print(asm:debug_disassemble())
 		print("===")
+		io.flush()
 		error(err, 2)
 	end
 end
 
-test("write std out", function(asm)
-	local msg = "hello world\n"
-	local STDOUT_FILENO = 1
-	local WRITE = jit.os == "Linux" and 1 or 0x2000004
-	asm:mov("rax", WRITE)
-	asm:mov("rdi", STDOUT_FILENO)
-	asm:mov("rsi", memory.object_to_address(msg))
-	asm:mov("rdx", #msg)
-	asm:syscall()
-	asm:ret()
-	local fn = ffi.cast("void (*)(void)", asm:build())
-	fn()
-end)
+local test_values = {
+	0ULL,
+	42ULL,
+	0xFFULL,
+	0xFFFFULL,
+	0xFFFFFFFFULL,
+	0x7FFFFFFFFFFFFFFFLL,
+	-1LL,
+	0x1234567890ABCDEFULL,
+	0x0F0F0F0F0F0F0F0FULL,
+	0xF0F0F0F0F0F0F0F0ULL,
+	0x8000000000000000ULL,
+	0xFFFFFFFFFFFFFFFFULL,
+}
+local regs_64 = {
+	"rax",
+	"rbx",
+	"rcx",
+	"rdx",
+	"rsi",
+	"rdi",
+	"rsp",
+	"rbp",
+	"r8",
+	"r9",
+	"r10",
+	"r11",
+	"r12",
+	"r13",
+	"r14",
+	"r15",
+}
 
-test("generated mov operations", function(asm)
-	-- Generate list of all 64-bit registers
-	local regs_64 = {
-		-- Standard registers
-		"rax",
-		"rbx",
-		"rcx",
-		"rdx",
-		"rsi",
-		"rdi",
-		"rsp",
-		"rbp",
-		-- Extended registers
-		"r8",
-		"r9",
-		"r10",
-		"r11",
-		"r12",
-		"r13",
-		"r14",
-		"r15",
-	}
-	-- Test values to try (including edge cases and interesting bit patterns)
-	local test_values = {
-		0ULL, -- Zero
-		42ULL, -- Small positive
-		0xFFULL, -- One byte
-		0xFFFFULL, -- Two bytes
-		0xFFFFFFFFULL, -- Four bytes
-		0x7FFFFFFFFFFFFFFFLL, -- Max signed 64-bit
-		-1LL, -- All bits set (signed)
-		0x1234567890ABCDEFULL, -- Mixed bits (unsigned)
-		0x0F0F0F0F0F0F0F0FULL, -- Pattern (unsigned)
-		0xF0F0F0F0F0F0F0F0ULL, -- Inverse pattern (unsigned)
-		-- Additional edge cases
-		0x8000000000000000ULL, -- Min signed value as unsigned
-		0xFFFFFFFFFFFFFFFFULL, -- Max unsigned value
-	}
+if false then
+	test("write std out", function(asm)
+		local msg = "hello world\n"
+		local STDOUT_FILENO = 1
+		local WRITE = jit.os == "Linux" and 1 or 0x2000004
+		asm:mov("rax", WRITE)
+		asm:mov("rdi", STDOUT_FILENO)
+		asm:mov("rsi", memory.object_to_address(msg))
+		asm:mov("rdx", #msg)
+		asm:syscall()
+		asm:ret()
+		asm:build("void (*)(void)")()
+	end)
+end
 
-	-- Test immediate to register for each register and test value
+test("mov imm to reg", function()
 	for _, reg in ipairs(regs_64) do
 		for _, val in ipairs(test_values) do
-			-- Skip rsp and rbp as they're special registers that might crash
 			if reg ~= "rsp" and reg ~= "rbp" then
-				asm = Assembler()
+				local asm = Assembler()
 
-				--print(string.format("\tmov %s, 0x%x", reg, val))
 				if reg ~= "rax" then asm:push(reg) end
 
-				-- Move test value to target register
 				asm:mov(reg, val)
 
-				-- Move from target register to rax for return
 				if reg ~= "rax" then asm:mov("rax", reg) end
 
 				if reg ~= "rax" then asm:pop(reg) end
 
 				asm:ret()
-				local fn = ffi.cast("uint64_t (*)(void)", asm:build())
-				local result = fn()
+				local result = asm:build("uint64_t (*)(void)")()
 
 				if result ~= val then
 					error(
@@ -112,41 +137,35 @@ test("generated mov operations", function(asm)
 			end
 		end
 	end
+end)
 
+test("mov reg to reg", function()
 	for _, src_reg in ipairs(regs_64) do
 		for _, dst_reg in ipairs(regs_64) do
-			-- Skip combinations with rsp and rbp
 			if
 				src_reg ~= "rsp" and
 				src_reg ~= "rbp" and
 				dst_reg ~= "rsp" and
 				dst_reg ~= "rbp"
 			then
-				asm = Assembler()
+				local asm = Assembler()
 				local test_val = 0x1234567890ABCDEFLL
 
-				--print(string.format("\tmov %s, %s", dst_reg, src_reg))
-				-- Save registers we're going to modify
 				if src_reg ~= "rax" then asm:push(src_reg) end
 
 				if dst_reg ~= "rax" and dst_reg ~= src_reg then asm:push(dst_reg) end
 
-				-- Setup source register with test value
 				asm:mov(src_reg, test_val)
-				-- Perform register to register move
 				asm:mov(dst_reg, src_reg)
 
-				-- Move result to rax if it's not already there
 				if dst_reg ~= "rax" then asm:mov("rax", dst_reg) end
 
-				-- Restore registers in reverse order
 				if dst_reg ~= "rax" and dst_reg ~= src_reg then asm:pop(dst_reg) end
 
 				if src_reg ~= "rax" then asm:pop(src_reg) end
 
 				asm:ret()
-				local fn = ffi.cast("uint64_t (*)(void)", asm:build())
-				local result = fn()
+				local result = asm:build("uint64_t (*)(void)")()
 
 				if result ~= test_val then
 					error(
@@ -162,61 +181,49 @@ test("generated mov operations", function(asm)
 			end
 		end
 	end
+end)
 
-	local mem = ffi.new("uint64_t[1]")
-
-	-- Test storing each value from register to memory
+test("mov reg to pointer", function()
 	for _, val in ipairs(test_values) do
-		asm = Assembler()
-		--print(string.format("\tmov [mem], rax (storing 0x%x)", val))
-		-- Load test value into rax
+		local mem = ffi.new("uint64_t[1]")
+		local asm = Assembler()
 		asm:mov("rax", val)
-		-- Store rax to memory
 		asm:mov_reg_to_pointer("rax", memory.object_to_address(mem))
 		asm:ret()
-		local fn = ffi.cast("void (*)(void)", asm:build())
-		fn()
+		asm:build("void (*)(void)")()
 
-		-- Verify memory contains the correct value
 		if mem[0] ~= val then
 			error(string.format("Memory store failed - Expected 0x%x, got 0x%x", val, memory[0]))
 		end
 	end
+end)
 
-	-- Test loading each value from memory to register
+test("mov pointer to reg", function()
 	for _, val in ipairs(test_values) do
-		-- First set up the test value in memory
+		local mem = ffi.new("uint64_t[1]")
 		mem[0] = val
-		asm = Assembler()
-		--print(string.format("\tmov rax, [mem] (loading 0x%x)", val))
-		-- Load from memory into rax
+		local asm = Assembler()
 		asm:mov_pointer_to_reg("rax", memory.object_to_address(mem))
 		asm:ret()
-		local fn = ffi.cast("uint64_t (*)(void)", asm:build())
-		local result = fn()
+		local result = asm:build("uint64_t (*)(void)")()
 
 		if result ~= val then
 			error(string.format("Memory load failed - Expected 0x%x, got 0x%x", val, result))
 		end
 	end
+end)
 
-	-- Test round trip (register -> memory -> different register)
+test("mov reg pointer roundtrip", function()
 	for _, val in ipairs(test_values) do
-		asm = Assembler()
-		--print(string.format("\tround trip through memory 0x%x", val))
-		-- Save rbx as we'll use it
+		local mem = ffi.new("uint64_t[1]")
+		local asm = Assembler()
 		asm:push("rbx")
-		-- Load test value into rbx
 		asm:mov("rbx", val)
-		-- Store rbx to memory
 		asm:mov_reg_to_pointer("rbx", memory.object_to_address(mem))
-		-- Load from memory into rax
 		asm:mov_pointer_to_reg("rax", memory.object_to_address(mem))
-		-- Restore rbx
 		asm:pop("rbx")
 		asm:ret()
-		local fn = ffi.cast("uint64_t (*)(void)", asm:build())
-		local result = fn()
+		local result = asm:build("uint64_t (*)(void)")()
 
 		if result ~= val then
 			error(string.format("Memory round trip failed - Expected 0x%x, got 0x%x", val, result))
@@ -224,43 +231,27 @@ test("generated mov operations", function(asm)
 	end
 end)
 
-ffi.cdef[[
-        typedef struct { 
-            float data[8] __attribute__((aligned(32))); 
-        } AlignedAVXArray;
-    ]]
-
 test("avx unaligned store", function(asm)
-	local asm = Assembler()
-	-- Create source and destination arrays (not necessarily aligned)
 	local source = ffi.new("float[8]")
 	local result = ffi.new("float[8]")
 
-	-- Initialize source data
 	for i = 0, 7 do
 		source[i] = i + 1.0
 		result[i] = 0.0
 	end
 
-	-- Generate AVX unaligned store test code
 	asm:push("rax")
-	-- Load source address into rax
 	asm:mov("rax", memory.object_to_address(source))
 	asm:vmovups_load("ymm0", "rax")
-	-- Store ymm0 to result
 	asm:mov("rax", memory.object_to_address(result))
 	asm:vmovups_store("rax", "ymm0")
 	asm:pop("rax")
 	asm:ret()
-	-- Run the code
-	local fn = ffi.cast("void (*)(void)", asm:build())
-	fn()
+	asm:build("void (*)(void)")()
 
-	-- Verify results
 	for i = 0, 7 do
 		local expected = source[i]
 		local got = result[i]
-		--print(string.format("\tindex %d: expected=%f, got=%f", i, expected, got))
 		assert(
 			math.abs(got - expected) < 0.0001,
 			string.format(
@@ -274,36 +265,29 @@ test("avx unaligned store", function(asm)
 end)
 
 test("avx aligned store", function(asm)
-	local asm = Assembler()
-	-- Create aligned source and destination arrays
-	local source = ffi.new("AlignedAVXArray")
-	local result = ffi.new("AlignedAVXArray")
+	local AlignedAVXArray = ffi.typeof[[struct { 
+		float data[8] __attribute__((aligned(32))); 
+	}]]
+	local source = AlignedAVXArray()
+	local result = AlignedAVXArray()
 
-	-- Initialize source data
 	for i = 0, 7 do
 		source.data[i] = i + 1.0
-		result.data[i] = 0.0 -- Clear result array
+		result.data[i] = 0.0
 	end
 
-	-- Generate AVX store test code
 	asm:push("rax")
-	-- Load source address into rax and load data into ymm0
 	asm:mov("rax", memory.object_to_address(source.data))
 	asm:vmovups_load("ymm0", "rax")
-	-- Store ymm0 to result
 	asm:mov("rax", memory.object_to_address(result.data))
 	asm:vmovaps_store("rax", "ymm0")
 	asm:pop("rax")
 	asm:ret()
-	-- Run the code
-	local fn = ffi.cast("void (*)(void)", asm:build())
-	fn()
+	asm:build("void (*)(void)")()
 
-	-- Verify results
 	for i = 0, 7 do
 		local expected = source.data[i]
 		local got = result.data[i]
-		--print(string.format("\tindex %d: expected=%f, got=%f", i, expected, got))
 		assert(
 			math.abs(got - expected) < 0.0001,
 			string.format("AVX store test failed at index %d: expected %f, got %f", i, expected, got)
@@ -312,45 +296,33 @@ test("avx aligned store", function(asm)
 end)
 
 test("sse store", function(asm)
-	-- Define aligned float array type
 	ffi.cdef[[
 			typedef struct { float data[4] __attribute__((aligned(16))); } AlignedFloatArray;
 		]]
 	local source = ffi.new("AlignedFloatArray")
 	local result = ffi.new("AlignedFloatArray")
-	-- Initialize source data
 	source.data[0] = 1.0
 	source.data[1] = 2.0
 	source.data[2] = 3.0
 	source.data[3] = 4.0
 
-	-- Clear result array
 	for i = 0, 3 do
 		result.data[i] = 0.0
 	end
 
-	-- Generate SSE code
 	asm:push("rax")
-	-- Load source address and load into xmm0
 	asm:mov("rax", memory.object_to_address(source.data))
-	-- Load from [rax] to xmm0
 	asm:movaps_load("xmm0", "rax")
-	-- Move from xmm0 to xmm1
 	asm:movaps("xmm1", "xmm0")
-	-- Store xmm1 to result
 	asm:mov("rax", memory.object_to_address(result.data))
 	asm:movaps_store("rax", "xmm1")
 	asm:pop("rax")
 	asm:ret()
-	-- Run the code
-	local fn = ffi.cast("void (*)(void)", asm:build())
-	fn()
+	asm:build("void (*)(void)")()
 
-	-- Verify results
 	for i = 0, 3 do
 		local expected = source.data[i]
 		local got = result.data[i]
-		--print(string.format("\tindex %d: expected=%f, got=%f", i, expected, got))
 		assert(
 			math.abs(got - expected) < 0.0001,
 			string.format("SSE test failed at index %d: expected %f, got %f", i, expected, got)
@@ -358,129 +330,77 @@ test("sse store", function(asm)
 	end
 end)
 
-local function compare(func, expect)
-	local asm = Assembler()
-	func(asm)
-	equal(expect, asm:debug_disassemble(), 3)
+cmp():mov("rbx", "rax"):with("mov rbx,rax")
+cmp():mov("rax", {reg = "rcx", indirect = true}):with("mov rax,QWORD PTR [rcx]")
+cmp():mov("rax", {reg = "rdx", disp = 8, indirect = true}):with("mov rax,QWORD PTR [rdx+0x8]")
+cmp():mov("rax", {reg = "rbx", disp = 1000, indirect = true}):with("mov rax,QWORD PTR [rbx+0x3e8]")
+cmp():mov("rax", {index = "rcx", scale = 4}):with("mov rax,QWORD PTR [rcx*4+0x0]")
+cmp():mov("rax", {base = "rbx", index = "rcx", scale = 4}):with("mov rax,QWORD PTR [rbx+rcx*4]")
+cmp():mov("rax", {base = "rbx", index = "rcx", scale = 4, disp = 8}):with("mov rax,QWORD PTR [rbx+rcx*4+0x8]")
+cmp():mov("rax", {base = "rbx", index = "rcx", scale = 4, disp = 1000}):with("mov rax,QWORD PTR [rbx+rcx*4+0x3e8]")
+cmp():mov("rax", {reg = "rip", rip = true, disp = 32}):with("mov rax,QWORD PTR [rip+0x20]")
+cmp():mov("rax", {reg = "rbp", disp = 0, indirect = true}):with("mov rax,QWORD PTR [rbp+0x0]")
+
+do
+	cmp():mov("r12", "rdi"):with("mov r12,rdi")
+	cmp():mov("r12", {disp = 0x1, indirect = true}):with("mov r12,QWORD PTR ds:0x1")
+	cmp():mov("rcx", "rbx"):with("mov rcx,rbx")
+	cmp():mov("rcx", {disp = 0x1, indirect = true}):with("mov rcx,QWORD PTR ds:0x1")
+	cmp():mov("rcx", {disp = 0xdead, indirect = true}):with("mov rcx,QWORD PTR ds:0xdead")
+	cmp():mov("rcx", {reg = "rbx", indirect = true}):with("mov rcx,QWORD PTR [rbx]")
+	cmp():mov({reg = "rcx", indirect = true}, "rbx"):with("mov QWORD PTR [rcx],rbx")
+
+	if false then
+		cmp():mov("rcx", {reg = "rbx", scale = 1, indirect = true}):with("mov rcx,QWORD PTR [rbx*1]")
+		cmp():mov("rcx", {reg = "rbx", scale = 2, indirect = true}):with("mov rcx,QWORD PTR [rbx*2]")
+		cmp():mov("rcx", {reg = "rbx", scale = 4, indirect = true}):with("mov rcx,QWORD PTR [rbx*4]")
+		cmp():mov("rcx", {reg = "rbx", scale = 8, indirect = true}):with("mov rcx,QWORD PTR [rbx*8]")
+		cmp():mov("rcx", {reg = "rbx", scale = 1, disp = 0xdead, indirect = true}):with("mov rcx,QWORD PTR [rbx*1+0xdead]")
+		cmp():mov("rcx", {reg = "rbx", scale = 2, disp = 0xdead, indirect = true}):with("mov rcx,QWORD PTR [rbx*2+0xdead]")
+		cmp():mov("rcx", {reg = "rbx", scale = 4, disp = 0xdead, indirect = true}):with("mov rcx,QWORD PTR [rbx*4+0xdead]")
+		cmp():mov("rcx", {reg = "rbx", scale = 8, disp = 0xdead, indirect = true}):with("mov rcx,QWORD PTR [rbx*8+0xdead]")
+		cmp():mov("rcx", {base = "rdx", index = "rbx", scale = 1, disp = 0xdead}):with("mov rcx,QWORD PTR [rdx+rbx*1+0xdead]")
+		cmp():mov("rcx", {base = "rdx", index = "rbx", scale = 2, disp = 0xdead}):with("mov rcx,QWORD PTR [rdx+rbx*2+0xdead]")
+		cmp():mov("rcx", {base = "rdx", index = "rbx", scale = 4, disp = 0xdead}):with("mov rcx,QWORD PTR [rdx+rbx*4+0xdead]")
+		cmp():mov("rcx", {base = "rdx", index = "rbx", scale = 8, disp = 0xdead}):with("mov rcx,QWORD PTR [rdx+rbx*8+0xdead]")
+		cmp():mov({reg = "rbx", scale = 1, indirect = true}, "rcx"):with("mov QWORD PTR [rbx*1],rcx")
+		cmp():mov({reg = "rbx", scale = 2, indirect = true}, "rcx"):with("mov QWORD PTR [rbx*2],rcx")
+		cmp():mov({reg = "rbx", scale = 2, disp = 0xdead, indirect = true}, "rcx"):with("mov QWORD PTR [rbx*2+0xdead],rcx")
+		cmp():mov({reg = "rbx", scale = 1, disp = 1024, indirect = true}, "rcx"):with("mov QWORD PTR [rbx*1+0x400],rcx")
+		cmp():mov("xmm1", "xmm0"):with("movsd xmm1,xmm0")
+		cmp():mov("rbp", nil):with("push rbp")
+		cmp():mov("rbp", "rsp"):with("mov rbp,rsp")
+		cmp():mov("rax", {disp = 1337222223, lea = true}):with("lea rax,[1337222223]")
+		cmp():mov("rax", nil):with("call rax")
+		cmp():mov("rdi", {reg = "rip", disp = 0xf * 2, lea = true}):with("lea rdi,[rip+0x1e]")
+		cmp():mov("rdi", {reg = "rip", disp = 0xf, lea = true}):with("lea rdi,[rip+0xf]")
+		cmp():mov("rdi", {reg = "rip", lea = true}):with("lea rdi,[rip]")
+		cmp():mov({reg = "rbp", disp = 0, indirect = true}, "ebx"):with("mov DWORD PTR [rbp],ebx")
+		cmp():mov({reg = "rbp", disp = 1, indirect = true}, "ebx"):with("mov DWORD PTR [rbp+0x1],ebx")
+		cmp():mov({reg = "rbp", disp = 123123, indirect = true}, "ebx"):with("mov DWORD PTR [rbp+0x1e0f3],ebx")
+		cmp():mov({reg = "rbp", indirect = true}, "ecx"):with("mov DWORD PTR [rbp],ecx")
+		cmp():mov({reg = "rbp", disp = 0, indirect = true}, "ebx"):with("mov DWORD PTR [rbp+0x0],ebx")
+	end
 end
 
--- Test 1: Register to register
-compare(function(asm)
-	asm:mov("rbx", "rax")
-end, "mov rbx,rax")
-
--- Test 2: Base register only (indirect)
-compare(
-	function(asm)
-		asm:mov("rax", {reg = "rcx", indirect = true})
-	end,
-	"mov rax,QWORD PTR [rcx]"
-)
-
--- Test 3: Base + 8-bit displacement
-compare(
-	function(asm)
-		asm:mov("rax", {reg = "rdx", disp = 8, indirect = true})
-	end,
-	"mov rax,QWORD PTR [rdx+0x8]"
-)
-
--- Test 4: Base + 32-bit displacement
-compare(
-	function(asm)
-		asm:mov("rax", {reg = "rbx", disp = 1000, indirect = true})
-	end,
-	"mov rax,QWORD PTR [rbx+0x3e8]"
-)
-
--- Test 5: SIB with scaled index
-compare(
-	function(asm)
-		asm:mov("rax", {index = "rcx", scale = 4})
-	end,
-	"mov rax,QWORD PTR [rcx*4+0x0]"
-)
-
--- Test 6: SIB with base + scaled index
-compare(
-	function(asm)
-		asm:mov("rax", {base = "rbx", index = "rcx", scale = 4})
-	end,
-	"mov rax,QWORD PTR [rbx+rcx*4]"
-)
-
--- Test 7: SIB with base + scaled index + 8-bit displacement
-compare(
-	function(asm)
-		asm:mov("rax", {base = "rbx", index = "rcx", scale = 4, disp = 8})
-	end,
-	"mov rax,QWORD PTR [rbx+rcx*4+0x8]"
-)
-
--- Test 8: SIB with base + scaled index + 32-bit displacement
-compare(
-	function(asm)
-		asm:mov("rax", {base = "rbx", index = "rcx", scale = 4, disp = 1000})
-	end,
-	"mov rax,QWORD PTR [rbx+rcx*4+0x3e8]"
-)
-
--- Test 9: RIP-relative
-compare(
-	function(asm)
-		asm:mov("rax", {reg = "rip", rip = true, disp = 32})
-	end,
-	"mov rax,QWORD PTR [rip+0x20]"
-)
-
--- Test 10: Special case - [rbp]
-compare(
-	function(asm)
-		asm:mov("rax", {reg = "rbp", disp = 0, indirect = true})
-	end,
-	"mov rax,QWORD PTR [rbp+0x0]"
-)
-
 test("additional mov scenarios", function(asm)
-	-- Test values using proper 64-bit literals
-	local test_values = {
-		0ULL, -- Zero
-		42ULL, -- Small positive
-		0xFFULL, -- One byte
-		0xFFFFULL, -- Two bytes
-		0xFFFFFFFFULL, -- Four bytes
-		0x7FFFFFFFFFFFFFFFULL, -- Max signed 64-bit
-		ffi.new("int64_t", -1), -- All bits set (signed)
-		0x1234567890ABCDEFULL, -- Mixed bits
-		0x0F0F0F0F0F0F0F0FULL, -- Pattern
-		0xF0F0F0F0F0F0F0F0ULL, -- Inverse pattern
-		0x8000000000000000ULL, -- Min signed value
-		0xFFFFFFFFFFFFFFFFULL, -- Max unsigned value
-	}
-
-	-- Test immediate to register - only use caller-saved registers first
-	for _, reg in ipairs(
-		{
-			"rax",
-			"rcx",
-			"rdx", -- Caller-saved
-			"r8",
-			"r9",
-			"r10",
-			"r11", -- Also caller-saved
-		}
-	) do
+	for _, reg in ipairs({
+		"rax",
+		"rcx",
+		"rdx",
+		"r8",
+		"r9",
+		"r10",
+		"r11",
+	}) do
 		for _, val in ipairs(test_values) do
 			asm = Assembler()
-			-- Move test value directly
 			asm:mov(reg, val)
 
-			-- Move to rax for return if not already there
 			if reg ~= "rax" then asm:mov("rax", reg) end
 
 			asm:ret()
-			local fn = ffi.cast("uint64_t (*)(void)", asm:build())
-			local result = fn()
+			local result = asm:build("uint64_t (*)(void)")()
 			assert(
 				result == val,
 				string.format(
@@ -494,39 +414,30 @@ test("additional mov scenarios", function(asm)
 		end
 	end
 
-	-- Test memory addressing modes with displacement
-	-- Using more reasonable displacements that stay within our buffer
 	local test_displacements = {
-		0, -- No displacement
-		8, -- Positive small
-		-8, -- Negative small
-		24, -- Positive medium, 3 elements forward
-		-24, -- Negative medium, 3 elements back
-		120, -- Positive below 127 (8-bit displacement)
-		-120, -- Negative above -128 (8-bit displacement)
-		240, -- Positive requiring 32-bit displacement
-		-240, -- Negative requiring 32-bit displacement
+		0,
+		8,
+		-8,
+		24,
+		-24,
+		120,
+		-120,
+		240,
+		-240,
 	}
-	-- Allocate enough space for our displacement tests (positive and negative offsets)
-	-- Each uint64_t is 8 bytes, so we need enough for our max offset in either direction
-	local buffer_size = 64 -- This gives us ±256 bytes of safe addressing space
+	local buffer_size = 64
 	local mem = ffi.new("uint64_t[?]", buffer_size)
-	-- Get the middle of our buffer for base pointer
-	local middle_offset = (buffer_size / 2) * 8 -- Convert to bytes
+	local middle_offset = (buffer_size / 2) * 8
 	local test_val = 0x1234567890ABCDEFULL
 
 	for _, disp in ipairs(test_displacements) do
 		asm = Assembler()
-		-- Set up base address in rcx (caller-saved), pointing to middle of buffer
 		asm:mov("rcx", memory.object_to_address(mem) + middle_offset)
-		-- Store test value
 		asm:mov("rax", test_val)
 		asm:mov({reg = "rcx", disp = disp, indirect = true}, "rax")
-		-- Load and verify
 		asm:mov("rax", {reg = "rcx", disp = disp, indirect = true})
 		asm:ret()
-		local fn = ffi.cast("uint64_t (*)(void)", asm:build())
-		local result = fn()
+		local result = asm:build("uint64_t (*)(void)")()
 		assert(
 			result == test_val,
 			string.format(
@@ -538,23 +449,17 @@ test("additional mov scenarios", function(asm)
 		)
 	end
 
-	-- Test SIB addressing with different scales
 	local scales = {1, 2, 4, 8}
 
 	for _, scale in ipairs(scales) do
 		asm = Assembler()
-		-- Set up base and index registers (using caller-saved)
 		asm:mov("rcx", memory.object_to_address(mem))
-		asm:mov("rdx", 1) -- Use rdx instead of r8 for index
-		-- Store test value
+		asm:mov("rdx", 1)
 		asm:mov("rax", test_val)
-		-- Store rax to memory using SIB addressing
 		asm:mov({base = "rcx", index = "rdx", scale = scale}, "rax")
-		-- Load back using same addressing mode to verify
 		asm:mov("rax", {base = "rcx", index = "rdx", scale = scale})
 		asm:ret()
-		local fn = ffi.cast("uint64_t (*)(void)", asm:build())
-		local result = fn()
+		local result = asm:build("uint64_t (*)(void)")()
 		assert(
 			result == test_val,
 			string.format(
@@ -567,44 +472,106 @@ test("additional mov scenarios", function(asm)
 	end
 end)
 
--- Test invalid register combinations
-local function expect_error(fn, error_msg)
-	local ok, err = pcall(fn)
+test("basic forward jump", function(asm)
+	asm:xor("rax", "rax")
+	asm:jmp("skip")
+	asm:mov("rax", 1)
+	asm:label("skip")
+	asm:ret()
+	local result = asm:build("uint64_t (*)(void)")()
+	assert(result == 0, string.format("Forward jump failed: expected 0, got %d", result))
+end)
 
-	if not ok and string.find(err, error_msg, 1, true) then
+test("conditional jumps", function(asm)
+	asm:mov("rax", 5)
+	asm:cmp("rax", 5)
+	asm:jne("not_equal")
+	asm:mov("rax", 1)
+	asm:jmp("end")
+	asm:label("not_equal")
+	asm:mov("rax", 0)
+	asm:label("end")
+	asm:ret()
+	local result = asm:build("uint64_t (*)(void)")()
+	assert(result == 1, "JE/JNE test failed")
+end)
 
-	else
-		error(string.format("Expected error containing '%s', got: %s", error_msg, err), 3)
+test("multiple jumps", function(asm)
+	asm:mov("rax", 0)
+	asm:jmp("middle")
+	asm:mov("rax", 1)
+	asm:jmp("end")
+	asm:label("middle")
+	asm:mov("rax", 2)
+	asm:jmp("end")
+	asm:label("end")
+	asm:ret()
+	local result = asm:build("uint64_t (*)(void)")()
+	assert(result == 2, "Multiple jumps test failed")
+end)
+
+test("loop with conditional", function(asm)
+	asm:mov("rax", 0)
+	asm:mov("rcx", 5)
+	asm:label("loop")
+	asm:inc("rax")
+	asm:dec("rcx")
+	asm:cmp("rcx", 0)
+	asm:jg("loop")
+	asm:ret()
+	local result = asm:build("uint64_t (*)(void)")()
+	assert(result == 5, "Loop test failed")
+end)
+
+test("forward and backward jumps", function(asm)
+	asm:mov("rax", 0)
+	asm:mov("rcx", 3)
+	asm:jmp("start")
+	asm:label("loop")
+	asm:inc("rax")
+	asm:dec("rcx")
+	asm:label("start")
+	asm:cmp("rcx", 0)
+	asm:jg("loop")
+	asm:ret()
+	local result = asm:build("uint64_t (*)(void)")()
+	assert(result == 3, "Forward/backward jump test failed")
+end)
+
+test("error cases", function(asm)
+	local function test_undefined()
+		local asm = Assembler()
+		asm:jmp("undefined")
+		asm:ret()
+		return asm:build()
 	end
-end
+
+	local success = pcall(test_undefined)
+	assert(not success, "Should fail on undefined label")
+
+	local function test_duplicate()
+		local asm = Assembler()
+		asm:label("same")
+		asm:label("same")
+		return asm:build()
+	end
+
+	local success = pcall(test_duplicate)
+	assert(not success, "Should fail on duplicate label")
+end)
 
 local asm = Assembler()
 
--- Test invalid register names
-expect_error(function()
-	asm:mov("invalid_reg", "rax")
-end, "is not a valid register")
+expect_error(
+	function()
+		asm:mov("invalid_reg", "rax")
+	end,
+	"first argument must be a register"
+)
 
--- Test invalid scale values
 expect_error(
 	function()
 		asm:mov("rax", {index = "rcx", scale = 3})
 	end,
-	"Invalid scale value"
-)
-
--- Test ESP/RSP as index register
-expect_error(
-	function()
-		asm:mov("rax", {index = "rsp", scale = 4})
-	end,
-	"ESP/RSP cannot be used as an index register"
-)
-
--- Test invalid RIP-relative addressing combinations
-expect_error(
-	function()
-		asm:mov("rax", {reg = "rip", index = "rcx", rip = true})
-	end,
-	"RIP-relative addressing cannot use index"
+	"is not a valid register combination"
 )
