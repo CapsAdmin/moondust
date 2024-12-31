@@ -6,41 +6,60 @@ local function disassemble(str)
 	f:write(str)
 	f:close()
 	-- Use appropriate disassembler based on OS
-	local cmd
+	local output
+	local tbl = {}
 
 	if os == "Windows" then
-		-- Try to find MSVC's dumpbin
-		cmd = string.format("dumpbin /DISASM %s > %s", temp_bin, temp_asm)
+		local success = os.execute(string.format("dumpbin /DISASM %s > %s", temp_bin, temp_asm))
+
+		if not success then error("Failed to run disassembler") end
+
+		local f = assert(io.open(temp_asm, "r"))
+		output = f:read("*all")
+		f:close()
 	else
-		-- Use objdump or ndisasm on Unix-like systems
-		local has_objdump = os.execute("which objdump >/dev/null 2>&1")
+		local success = os.execute(
+			string.format(
+				"objdump --wide --disassembler-options=intel --disassemble-all --target=binary --architecture=i386:x86-64 --no-show-raw-insn --no-addresses %s > %s",
+				temp_bin,
+				temp_asm
+			)
+		)
 
-		if has_objdump == 0 then
-			cmd = string.format("objdump -D -b binary -m i386:x86-64 %s > %s", temp_bin, temp_asm)
-		else
-			local has_ndisasm = os.execute("which ndisasm >/dev/null 2>&1")
+		if not success then error("Failed to run disassembler") end
 
-			if has_ndisasm == 0 then
-				cmd = string.format("ndisasm -b 64 %s > %s", temp_bin, temp_asm)
+		local f = assert(io.open(temp_asm, "r"))
+		output = f:read("*all")
+
+		if not output or output == "" then return "" end
+
+		f:close()
+		output = output:match("%<.data%>:\n(.+)")
+
+		for line in output:gmatch("(.-)\n") do
+			line = line:gsub("%s+#%s*", "")
+			local inst, args = line:match("%s+(%S+)%s+(.+)")
+
+			if not inst then inst = line:match("%s+(%S+)") end
+
+			local a, b
+
+			if args then a, b = args:match("(.+),(.+)") end
+
+			if a and b then
+				table.insert(tbl, inst .. " " .. a .. "," .. b)
+			elseif a then
+				table.insert(tbl, inst .. " " .. a)
 			else
-				error("No suitable disassembler found (need objdump or ndisasm)")
+				table.insert(tbl, inst)
 			end
 		end
 	end
 
-	-- Run disassembler
-	local success = os.execute(cmd)
-
-	if not success then error("Failed to run disassembler") end
-
-	-- Read and return disassembly
-	local f = assert(io.open(temp_asm, "r"))
-	local disasm = f:read("*all")
-	f:close()
-	-- Clean up temp files
 	os.remove(temp_bin)
 	os.remove(temp_asm)
-	return disasm
+	output = table.concat(tbl, "\n")
+	return output
 end
 
 return disassemble

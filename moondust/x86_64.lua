@@ -169,46 +169,65 @@ return function(Assembler) -- x64_86
 					error("Invalid scale value: " .. tostring(reg2.scale), 2)
 				end
 
-				if reg2.reg == "rip" and (reg2.index or reg2.scale or reg2.base) then
+				if reg2.rip and (reg2.index or reg2.scale or reg2.base) then
 					error("RIP-relative addressing cannot use index, scale, or base", 2)
 				end
 
-				if not reg2.indirect and reg1 and reg2 then
+				if
+					not reg2.indirect and
+					not reg2.index and
+					not reg2.scale and
+					not reg2.rip and
+					reg1 and
+					reg2
+				then
 					self:emit(encode_modrm(REG_TO_REG, reg1, reg2))
 					return
 				end
 
 				local mod
 				local effective_disp
-				local need_sib = reg2.index or reg2.scale or is_sp
 
-				if reg2.reg == "rip" then
+				if reg2.rip then
+					-- RIP-relative addressing
 					mod = NO_DISP
-					reg2 = {i = RIP_RELATIVE}
-					effective_disp = reg2.disp or 0
-				else
-					local disp = reg2.disp
-					local is_bp = reg2.reg and (reg2.reg == "ebp" or reg2.reg == "rbp")
-
-					if not disp and reg2.reg and (is_bp or reg2.reg == "r13") then
-						mod = DISP8
-						effective_disp = 0
-					elseif not disp or (disp == 0 and not is_bp) then
-						mod = NO_DISP
-					elseif disp >= -128 and disp <= 127 then
-						mod = DISP8
-						effective_disp = disp
-					else
-						mod = DISP32
-						effective_disp = disp
-					end
+					self:emit(encode_modrm(mod, reg1, {i = RIP_RELATIVE}))
+					self:emit_i32(reg2.disp or 0)
+					return
 				end
 
-				if need_sib then
-					self:emit(encode_modrm(mod, reg1, {i = SIB_INDICATOR}))
-					self:emit(encode_sib(reg2.scale, REG(reg2.index), reg2.base and REG(reg2.base) or reg2))
+				local disp = reg2.disp
+				local is_bp = reg2.reg and (reg2.reg == "ebp" or reg2.reg == "rbp")
+
+				if not disp and reg2.reg and (is_bp or reg2.reg == "r13") then
+					mod = DISP8
+					effective_disp = 0
+				elseif not disp or (disp == 0 and not is_bp) then
+					mod = NO_DISP
+				elseif disp >= -128 and disp <= 127 then
+					mod = DISP8
+					effective_disp = disp
 				else
-					self:emit(encode_modrm(mod, reg1, reg2))
+					mod = DISP32
+					effective_disp = disp
+				end
+
+				-- When there's only an index and scale, we should force NO_BASE
+				if reg2.index and reg2.scale and not reg2.base then
+					self:emit(encode_modrm(NO_DISP, reg1, {i = SIB_INDICATOR}))
+					self:emit(encode_sib(reg2.scale, REG(reg2.index), {i = NO_BASE}))
+					self:emit_i32(0) -- Important: emit 32-bit zero displacement
+				else
+					-- Inside emit_modrm_sib function, modify the SIB case handling:
+					if reg2.index or reg2.scale or is_sp then
+						self:emit(encode_modrm(mod, reg1, {i = SIB_INDICATOR}))
+						-- Ensure we're using the correct index register for SIB
+						local index_reg = reg2.index and REG(reg2.index) or nil
+						local base_reg = reg2.base and REG(reg2.base) or reg2
+						self:emit(encode_sib(reg2.scale, index_reg, base_reg))
+					else
+						self:emit(encode_modrm(mod, reg1, reg2))
+					end
 				end
 
 				if reg2.reg == "rip" then
@@ -333,13 +352,47 @@ return function(Assembler) -- x64_86
 		end
 	end
 
+	function Assembler:mov_reg_from_mem(reg, mem)
+		local reg1 = REG(reg)
+		local mem_op = REG(mem)
+
+		if reg1.bits == 64 then
+			self:rex(true, reg1.is_extended, mem_op.is_extended, false)
+			self:emit(0x8B) -- MOV r64, r/m64
+			self:emit_modrm_sib(reg1, mem_op)
+		else
+			error("mov from memory only supports 64-bit registers", 2)
+		end
+	end
+
+	function Assembler:mov_mem_from_reg(mem, reg)
+		local reg1 = REG(reg)
+		local mem_op = REG(mem)
+
+		if reg1.bits == 64 then
+			self:rex(true, reg1.is_extended, mem_op.is_extended, false)
+			self:emit(0x89) -- MOV r/m64, r64
+			self:emit_modrm_sib(reg1, mem_op)
+		else
+			error("mov to memory only supports 64-bit registers", 2)
+		end
+	end
+
+	-- Update the mov function to handle memory operands
 	function Assembler:mov(op1, op2, signed)
 		if IS_REG(op1) and tonumber(op2) then
 			self:mov_imm_to_reg(op1, op2, signed)
 		elseif IS_REG(op1) and IS_REG(op2) then
-			self:mov_reg_to_reg(op1, op2)
+			-- Memory operand if it has indirect flag or uses SIB addressing
+			if op2.indirect or op2.index or op2.scale or op2.base or op2.rip then
+				self:mov_reg_from_mem(op1, op2)
+			elseif op1.indirect or op1.index or op1.scale or op1.base or op1.rip then
+				self:mov_mem_from_reg(op1, op2)
+			else
+				self:mov_reg_to_reg(op1, op2)
+			end
 		else
-			error("invalid arguments", 2)
+			error("is not a valid register", 2)
 		end
 	end
 
