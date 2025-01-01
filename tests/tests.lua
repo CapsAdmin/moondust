@@ -1,4 +1,5 @@
 local Assembler = require("moondust")
+local R = Assembler.Registers
 local memory = require("moondust.memory")
 local ffi = require("ffi")
 
@@ -73,22 +74,22 @@ local test_values = {
 	0xFFFFFFFFFFFFFFFFULL,
 }
 local regs_64 = {
-	"rax",
-	"rbx",
-	"rcx",
-	"rdx",
-	"rsi",
-	"rdi",
-	"rsp",
-	"rbp",
-	"r8",
-	"r9",
-	"r10",
-	"r11",
-	"r12",
-	"r13",
-	"r14",
-	"r15",
+	R.rax,
+	R.rbx,
+	R.rcx,
+	R.rdx,
+	R.rsi,
+	R.rdi,
+	R.rsp,
+	R.rbp,
+	R.r8,
+	R.r9,
+	R.r10,
+	R.r11,
+	R.r12,
+	R.r13,
+	R.r14,
+	R.r15,
 }
 
 if false then
@@ -96,10 +97,10 @@ if false then
 		local msg = "hello world\n"
 		local STDOUT_FILENO = 1
 		local WRITE = jit.os == "Linux" and 1 or 0x2000004
-		asm:mov("rax", WRITE)
-		asm:mov("rdi", STDOUT_FILENO)
-		asm:mov("rsi", memory.object_to_address(msg))
-		asm:mov("rdx", #msg)
+		asm:mov(R.rax, WRITE)
+		asm:mov(R.rdi, STDOUT_FILENO)
+		asm:mov(R.rsi, memory.object_to_address(msg))
+		asm:mov(R.rdx, #msg)
 		asm:syscall()
 		asm:ret()
 		asm:build("void (*)(void)")()
@@ -109,16 +110,16 @@ end
 test("mov imm to reg", function()
 	for _, reg in ipairs(regs_64) do
 		for _, val in ipairs(test_values) do
-			if reg ~= "rsp" and reg ~= "rbp" then
+			if reg.reg ~= "rsp" and reg.reg ~= "rbp" then
 				local asm = Assembler()
 
-				if reg ~= "rax" then asm:push(reg) end
+				if reg.reg ~= "rax" then asm:push(reg) end
 
 				asm:mov(reg, val)
 
-				if reg ~= "rax" then asm:mov("rax", reg) end
+				if reg.reg ~= "rax" then asm:mov(R.rax, reg) end
 
-				if reg ~= "rax" then asm:pop(reg) end
+				if reg.reg ~= "rax" then asm:pop(reg) end
 
 				asm:ret()
 				local result = asm:build("uint64_t (*)(void)")()
@@ -143,26 +144,26 @@ test("mov reg to reg", function()
 	for _, src_reg in ipairs(regs_64) do
 		for _, dst_reg in ipairs(regs_64) do
 			if
-				src_reg ~= "rsp" and
-				src_reg ~= "rbp" and
-				dst_reg ~= "rsp" and
-				dst_reg ~= "rbp"
+				src_reg.reg ~= "rsp" and
+				src_reg.reg ~= "rbp" and
+				dst_reg.reg ~= "rsp" and
+				dst_reg.reg ~= "rbp"
 			then
 				local asm = Assembler()
 				local test_val = 0x1234567890ABCDEFLL
 
-				if src_reg ~= "rax" then asm:push(src_reg) end
+				if src_reg.reg ~= "rax" then asm:push(src_reg) end
 
-				if dst_reg ~= "rax" and dst_reg ~= src_reg then asm:push(dst_reg) end
+				if dst_reg.reg ~= "rax" and dst_reg ~= src_reg then asm:push(dst_reg) end
 
 				asm:mov(src_reg, test_val)
 				asm:mov(dst_reg, src_reg)
 
-				if dst_reg ~= "rax" then asm:mov("rax", dst_reg) end
+				if dst_reg.reg ~= "rax" then asm:mov(R.rax, dst_reg) end
 
-				if dst_reg ~= "rax" and dst_reg ~= src_reg then asm:pop(dst_reg) end
+				if dst_reg.reg ~= "rax" and dst_reg ~= src_reg then asm:pop(dst_reg) end
 
-				if src_reg ~= "rax" then asm:pop(src_reg) end
+				if src_reg.reg ~= "rax" then asm:pop(src_reg) end
 
 				asm:ret()
 				local result = asm:build("uint64_t (*)(void)")()
@@ -187,8 +188,8 @@ test("mov reg to pointer", function()
 	for _, val in ipairs(test_values) do
 		local mem = ffi.new("uint64_t[1]")
 		local asm = Assembler()
-		asm:mov("rax", val)
-		asm:mov_reg_to_pointer("rax", memory.object_to_address(mem))
+		asm:mov(R.rax, val)
+		asm:mov_reg_to_pointer(R.rax, memory.object_to_address(mem))
 		asm:ret()
 		asm:build("void (*)(void)")()
 
@@ -203,7 +204,7 @@ test("mov pointer to reg", function()
 		local mem = ffi.new("uint64_t[1]")
 		mem[0] = val
 		local asm = Assembler()
-		asm:mov_pointer_to_reg("rax", memory.object_to_address(mem))
+		asm:mov_pointer_to_reg(R.rax, memory.object_to_address(mem))
 		asm:ret()
 		local result = asm:build("uint64_t (*)(void)")()
 
@@ -217,11 +218,11 @@ test("mov reg pointer roundtrip", function()
 	for _, val in ipairs(test_values) do
 		local mem = ffi.new("uint64_t[1]")
 		local asm = Assembler()
-		asm:push("rbx")
-		asm:mov("rbx", val)
-		asm:mov_reg_to_pointer("rbx", memory.object_to_address(mem))
-		asm:mov_pointer_to_reg("rax", memory.object_to_address(mem))
-		asm:pop("rbx")
+		asm:push(R.rbx)
+		asm:mov(R.rbx, val)
+		asm:mov_reg_to_pointer(R.rbx, memory.object_to_address(mem))
+		asm:mov_pointer_to_reg(R.rax, memory.object_to_address(mem))
+		asm:pop(R.rbx)
 		asm:ret()
 		local result = asm:build("uint64_t (*)(void)")()
 
@@ -240,12 +241,12 @@ test("avx unaligned store", function(asm)
 		result[i] = 0.0
 	end
 
-	asm:push("rax")
-	asm:mov("rax", memory.object_to_address(source))
-	asm:vmovups_load("ymm0", "rax")
-	asm:mov("rax", memory.object_to_address(result))
-	asm:vmovups_store("rax", "ymm0")
-	asm:pop("rax")
+	asm:push(R.rax)
+	asm:mov(R.rax, memory.object_to_address(source))
+	asm:vmovups_load(R.ymm0, R.rax)
+	asm:mov(R.rax, memory.object_to_address(result))
+	asm:vmovups_store(R.rax, R.ymm0)
+	asm:pop(R.rax)
 	asm:ret()
 	asm:build("void (*)(void)")()
 
@@ -276,12 +277,12 @@ test("avx aligned store", function(asm)
 		result.data[i] = 0.0
 	end
 
-	asm:push("rax")
-	asm:mov("rax", memory.object_to_address(source.data))
-	asm:vmovups_load("ymm0", "rax")
-	asm:mov("rax", memory.object_to_address(result.data))
-	asm:vmovaps_store("rax", "ymm0")
-	asm:pop("rax")
+	asm:push(R.rax)
+	asm:mov(R.rax, memory.object_to_address(source.data))
+	asm:vmovups_load(R.ymm0, R.rax)
+	asm:mov(R.rax, memory.object_to_address(result.data))
+	asm:vmovaps_store(R.rax, R.ymm0)
+	asm:pop(R.rax)
 	asm:ret()
 	asm:build("void (*)(void)")()
 
@@ -310,13 +311,13 @@ test("sse store", function(asm)
 		result.data[i] = 0.0
 	end
 
-	asm:push("rax")
-	asm:mov("rax", memory.object_to_address(source.data))
-	asm:movaps_load("xmm0", "rax")
-	asm:movaps("xmm1", "xmm0")
-	asm:mov("rax", memory.object_to_address(result.data))
-	asm:movaps_store("rax", "xmm1")
-	asm:pop("rax")
+	asm:push(R.rax)
+	asm:mov(R.rax, memory.object_to_address(source.data))
+	asm:movaps_load(R.xmm0, R.rax)
+	asm:movaps(R.xmm1, R.xmm0)
+	asm:mov(R.rax, memory.object_to_address(result.data))
+	asm:movaps_store(R.rax, R.xmm1)
+	asm:pop(R.rax)
 	asm:ret()
 	asm:build("void (*)(void)")()
 
@@ -330,74 +331,74 @@ test("sse store", function(asm)
 	end
 end)
 
-cmp():mov("rbx", "rax"):with("mov rbx,rax")
-cmp():mov("rax", {reg = "rcx", indirect = true}):with("mov rax,QWORD PTR [rcx]")
-cmp():mov("rax", {reg = "rdx", disp = 8, indirect = true}):with("mov rax,QWORD PTR [rdx+0x8]")
-cmp():mov("rax", {reg = "rbx", disp = 1000, indirect = true}):with("mov rax,QWORD PTR [rbx+0x3e8]")
-cmp():mov("rax", {index = "rcx", scale = 4}):with("mov rax,QWORD PTR [rcx*4+0x0]")
-cmp():mov("rax", {base = "rbx", index = "rcx", scale = 4}):with("mov rax,QWORD PTR [rbx+rcx*4]")
-cmp():mov("rax", {base = "rbx", index = "rcx", scale = 4, disp = 8}):with("mov rax,QWORD PTR [rbx+rcx*4+0x8]")
-cmp():mov("rax", {base = "rbx", index = "rcx", scale = 4, disp = 1000}):with("mov rax,QWORD PTR [rbx+rcx*4+0x3e8]")
-cmp():mov("rax", {reg = "rip", rip = true, disp = 32}):with("mov rax,QWORD PTR [rip+0x20]")
-cmp():mov("rax", {reg = "rbp", disp = 0, indirect = true}):with("mov rax,QWORD PTR [rbp+0x0]")
+cmp():mov(R.rbx, R.rax):with("mov rbx,rax")
+cmp():mov(R.rax, R({reg = "rcx", indirect = true})):with("mov rax,QWORD PTR [rcx]")
+cmp():mov(R.rax, R({reg = "rdx", disp = 8, indirect = true})):with("mov rax,QWORD PTR [rdx+0x8]")
+cmp():mov(R.rax, R({reg = "rbx", disp = 1000, indirect = true})):with("mov rax,QWORD PTR [rbx+0x3e8]")
+cmp():mov(R.rax, R({index = "rcx", scale = 4})):with("mov rax,QWORD PTR [rcx*4+0x0]")
+cmp():mov(R.rax, R({base = "rbx", index = "rcx", scale = 4})):with("mov rax,QWORD PTR [rbx+rcx*4]")
+cmp():mov(R.rax, R({base = "rbx", index = "rcx", scale = 4, disp = 8})):with("mov rax,QWORD PTR [rbx+rcx*4+0x8]")
+cmp():mov(R.rax, R({base = "rbx", index = "rcx", scale = 4, disp = 1000})):with("mov rax,QWORD PTR [rbx+rcx*4+0x3e8]")
+cmp():mov(R.rax, R({reg = "rip", rip = true, disp = 32})):with("mov rax,QWORD PTR [rip+0x20]")
+cmp():mov(R.rax, R({reg = "rbp", disp = 0, indirect = true})):with("mov rax,QWORD PTR [rbp+0x0]")
 
 do
-	cmp():mov("r12", "rdi"):with("mov r12,rdi")
-	cmp():mov("r12", {disp = 0x1, indirect = true}):with("mov r12,QWORD PTR ds:0x1")
-	cmp():mov("rcx", "rbx"):with("mov rcx,rbx")
-	cmp():mov("rcx", {disp = 0x1, indirect = true}):with("mov rcx,QWORD PTR ds:0x1")
-	cmp():mov("rcx", {disp = 0xdead, indirect = true}):with("mov rcx,QWORD PTR ds:0xdead")
-	cmp():mov("rcx", {reg = "rbx", indirect = true}):with("mov rcx,QWORD PTR [rbx]")
-	cmp():mov({reg = "rcx", indirect = true}, "rbx"):with("mov QWORD PTR [rcx],rbx")
+	cmp():mov(R.r12, R.rdi):with("mov r12,rdi")
+	cmp():mov(R.r12, R({disp = 0x1, indirect = true})):with("mov r12,QWORD PTR ds:0x1")
+	cmp():mov(R.rcx, R.rbx):with("mov rcx,rbx")
+	cmp():mov(R.rcx, R({disp = 0x1, indirect = true})):with("mov rcx,QWORD PTR ds:0x1")
+	cmp():mov(R.rcx, R({disp = 0xdead, indirect = true})):with("mov rcx,QWORD PTR ds:0xdead")
+	cmp():mov(R.rcx, R({reg = "rbx", indirect = true})):with("mov rcx,QWORD PTR [rbx]")
+	cmp():mov(R({reg = "rcx", indirect = true}), R.rbx):with("mov QWORD PTR [rcx],rbx")
 
 	if false then
-		cmp():mov("rcx", {reg = "rbx", scale = 1, indirect = true}):with("mov rcx,QWORD PTR [rbx*1]")
-		cmp():mov("rcx", {reg = "rbx", scale = 2, indirect = true}):with("mov rcx,QWORD PTR [rbx*2]")
-		cmp():mov("rcx", {reg = "rbx", scale = 4, indirect = true}):with("mov rcx,QWORD PTR [rbx*4]")
-		cmp():mov("rcx", {reg = "rbx", scale = 8, indirect = true}):with("mov rcx,QWORD PTR [rbx*8]")
-		cmp():mov("rcx", {reg = "rbx", scale = 1, disp = 0xdead, indirect = true}):with("mov rcx,QWORD PTR [rbx*1+0xdead]")
-		cmp():mov("rcx", {reg = "rbx", scale = 2, disp = 0xdead, indirect = true}):with("mov rcx,QWORD PTR [rbx*2+0xdead]")
-		cmp():mov("rcx", {reg = "rbx", scale = 4, disp = 0xdead, indirect = true}):with("mov rcx,QWORD PTR [rbx*4+0xdead]")
-		cmp():mov("rcx", {reg = "rbx", scale = 8, disp = 0xdead, indirect = true}):with("mov rcx,QWORD PTR [rbx*8+0xdead]")
-		cmp():mov("rcx", {base = "rdx", index = "rbx", scale = 1, disp = 0xdead}):with("mov rcx,QWORD PTR [rdx+rbx*1+0xdead]")
-		cmp():mov("rcx", {base = "rdx", index = "rbx", scale = 2, disp = 0xdead}):with("mov rcx,QWORD PTR [rdx+rbx*2+0xdead]")
-		cmp():mov("rcx", {base = "rdx", index = "rbx", scale = 4, disp = 0xdead}):with("mov rcx,QWORD PTR [rdx+rbx*4+0xdead]")
-		cmp():mov("rcx", {base = "rdx", index = "rbx", scale = 8, disp = 0xdead}):with("mov rcx,QWORD PTR [rdx+rbx*8+0xdead]")
-		cmp():mov({reg = "rbx", scale = 1, indirect = true}, "rcx"):with("mov QWORD PTR [rbx*1],rcx")
-		cmp():mov({reg = "rbx", scale = 2, indirect = true}, "rcx"):with("mov QWORD PTR [rbx*2],rcx")
-		cmp():mov({reg = "rbx", scale = 2, disp = 0xdead, indirect = true}, "rcx"):with("mov QWORD PTR [rbx*2+0xdead],rcx")
-		cmp():mov({reg = "rbx", scale = 1, disp = 1024, indirect = true}, "rcx"):with("mov QWORD PTR [rbx*1+0x400],rcx")
-		cmp():mov("xmm1", "xmm0"):with("movsd xmm1,xmm0")
-		cmp():mov("rbp", nil):with("push rbp")
-		cmp():mov("rbp", "rsp"):with("mov rbp,rsp")
-		cmp():mov("rax", {disp = 1337222223, lea = true}):with("lea rax,[1337222223]")
-		cmp():mov("rax", nil):with("call rax")
-		cmp():mov("rdi", {reg = "rip", disp = 0xf * 2, lea = true}):with("lea rdi,[rip+0x1e]")
-		cmp():mov("rdi", {reg = "rip", disp = 0xf, lea = true}):with("lea rdi,[rip+0xf]")
-		cmp():mov("rdi", {reg = "rip", lea = true}):with("lea rdi,[rip]")
-		cmp():mov({reg = "rbp", disp = 0, indirect = true}, "ebx"):with("mov DWORD PTR [rbp],ebx")
-		cmp():mov({reg = "rbp", disp = 1, indirect = true}, "ebx"):with("mov DWORD PTR [rbp+0x1],ebx")
-		cmp():mov({reg = "rbp", disp = 123123, indirect = true}, "ebx"):with("mov DWORD PTR [rbp+0x1e0f3],ebx")
-		cmp():mov({reg = "rbp", indirect = true}, "ecx"):with("mov DWORD PTR [rbp],ecx")
-		cmp():mov({reg = "rbp", disp = 0, indirect = true}, "ebx"):with("mov DWORD PTR [rbp+0x0],ebx")
+		cmp():mov(R.rcx, R({reg = "rbx", scale = 1, indirect = true})):with("mov rcx,QWORD PTR [rbx*1]")
+		cmp():mov(R.rcx, R({reg = "rbx", scale = 2, indirect = true})):with("mov rcx,QWORD PTR [rbx*2]")
+		cmp():mov(R.rcx, R({reg = "rbx", scale = 4, indirect = true})):with("mov rcx,QWORD PTR [rbx*4]")
+		cmp():mov(R.rcx, R({reg = "rbx", scale = 8, indirect = true})):with("mov rcx,QWORD PTR [rbx*8]")
+		cmp():mov(R.rcx, R({reg = "rbx", scale = 1, disp = 0xdead, indirect = true})):with("mov rcx,QWORD PTR [rbx*1+0xdead]")
+		cmp():mov(R.rcx, R({reg = "rbx", scale = 2, disp = 0xdead, indirect = true})):with("mov rcx,QWORD PTR [rbx*2+0xdead]")
+		cmp():mov(R.rcx, R({reg = "rbx", scale = 4, disp = 0xdead, indirect = true})):with("mov rcx,QWORD PTR [rbx*4+0xdead]")
+		cmp():mov(R.rcx, R({reg = "rbx", scale = 8, disp = 0xdead, indirect = true})):with("mov rcx,QWORD PTR [rbx*8+0xdead]")
+		cmp():mov(R.rcx, R({base = "rdx", index = "rbx", scale = 1, disp = 0xdead})):with("mov rcx,QWORD PTR [rdx+rbx*1+0xdead]")
+		cmp():mov(R.rcx, R({base = "rdx", index = "rbx", scale = 2, disp = 0xdead})):with("mov rcx,QWORD PTR [rdx+rbx*2+0xdead]")
+		cmp():mov(R.rcx, R({base = "rdx", index = "rbx", scale = 4, disp = 0xdead})):with("mov rcx,QWORD PTR [rdx+rbx*4+0xdead]")
+		cmp():mov(R.rcx, R({base = "rdx", index = "rbx", scale = 8, disp = 0xdead})):with("mov rcx,QWORD PTR [rdx+rbx*8+0xdead]")
+		cmp():mov(R({reg = "rbx", scale = 1, indirect = true}), R.rcx):with("mov QWORD PTR [rbx*1],rcx")
+		cmp():mov(R({reg = "rbx", scale = 2, indirect = true}), R.rcx):with("mov QWORD PTR [rbx*2],rcx")
+		cmp():mov(R({reg = "rbx", scale = 2, disp = 0xdead, indirect = true}), "rcx"):with("mov QWORD PTR [rbx*2+0xdead],rcx")
+		cmp():mov(R({reg = "rbx", scale = 1, disp = 1024, indirect = true}), "rcx"):with("mov QWORD PTR [rbx*1+0x400],rcx")
+		cmp():mov(R.xmm1, R.xmm0):with("movsd xmm1,xmm0")
+		cmp():mov(R.rbp, nil):with("push rbp")
+		cmp():mov(R.rbp, "rsp"):with("mov rbp,rsp")
+		cmp():mov(R.rax, {disp = 1337222223, lea = true}):with("lea rax,[1337222223]")
+		cmp():mov(R.rax, nil):with("call rax")
+		cmp():mov(R.rdi, {reg = "rip", disp = 0xf * 2, lea = true}):with("lea rdi,[rip+0x1e]")
+		cmp():mov(R.rdi, {reg = "rip", disp = 0xf, lea = true}):with("lea rdi,[rip+0xf]")
+		cmp():mov(R.rdi, {reg = "rip", lea = true}):with("lea rdi,[rip]")
+		cmp():mov(R({reg = "rbp", disp = 0, indirect = true}), R.ebx):with("mov DWORD PTR [rbp],ebx")
+		cmp():mov(R({reg = "rbp", disp = 1, indirect = true}), R.ebx):with("mov DWORD PTR [rbp+0x1],ebx")
+		cmp():mov(R({reg = "rbp", disp = 123123, indirect = true}), R.ebx):with("mov DWORD PTR [rbp+0x1e0f3],ebx")
+		cmp():mov(R({reg = "rbp", indirect = true}), "ecx"):with("mov DWORD PTR [rbp],ecx")
+		cmp():mov(R({reg = "rbp", disp = 0, indirect = true}), R.ebx):with("mov DWORD PTR [rbp+0x0],ebx")
 	end
 end
 
 test("additional mov scenarios", function(asm)
 	for _, reg in ipairs({
-		"rax",
-		"rcx",
-		"rdx",
-		"r8",
-		"r9",
-		"r10",
-		"r11",
+		R.rax,
+		R.rcx,
+		R.rdx,
+		R.r8,
+		R.r9,
+		R.r10,
+		R.r11,
 	}) do
 		for _, val in ipairs(test_values) do
-			asm = Assembler()
+			local asm = Assembler()
 			asm:mov(reg, val)
 
-			if reg ~= "rax" then asm:mov("rax", reg) end
+			if reg.reg ~= "rax" then asm:mov(R.rax, reg) end
 
 			asm:ret()
 			local result = asm:build("uint64_t (*)(void)")()
@@ -432,10 +433,10 @@ test("additional mov scenarios", function(asm)
 
 	for _, disp in ipairs(test_displacements) do
 		asm = Assembler()
-		asm:mov("rcx", memory.object_to_address(mem) + middle_offset)
-		asm:mov("rax", test_val)
-		asm:mov({reg = "rcx", disp = disp, indirect = true}, "rax")
-		asm:mov("rax", {reg = "rcx", disp = disp, indirect = true})
+		asm:mov(R.rcx, memory.object_to_address(mem) + middle_offset)
+		asm:mov(R.rax, test_val)
+		asm:mov(R({reg = "rcx", disp = disp, indirect = true}), R.rax)
+		asm:mov(R.rax, R({reg = "rcx", disp = disp, indirect = true}))
 		asm:ret()
 		local result = asm:build("uint64_t (*)(void)")()
 		assert(
@@ -453,11 +454,11 @@ test("additional mov scenarios", function(asm)
 
 	for _, scale in ipairs(scales) do
 		asm = Assembler()
-		asm:mov("rcx", memory.object_to_address(mem))
-		asm:mov("rdx", 1)
-		asm:mov("rax", test_val)
-		asm:mov({base = "rcx", index = "rdx", scale = scale}, "rax")
-		asm:mov("rax", {base = "rcx", index = "rdx", scale = scale})
+		asm:mov(R.rcx, memory.object_to_address(mem))
+		asm:mov(R.rdx, 1)
+		asm:mov(R.rax, test_val)
+		asm:mov(R({base = "rcx", index = "rdx", scale = scale}), R.rax)
+		asm:mov(R.rax, R({base = "rcx", index = "rdx", scale = scale}))
 		asm:ret()
 		local result = asm:build("uint64_t (*)(void)")()
 		assert(
@@ -473,9 +474,9 @@ test("additional mov scenarios", function(asm)
 end)
 
 test("basic forward jump", function(asm)
-	asm:xor("rax", "rax")
+	asm:xor(R.rax, R.rax)
 	asm:jmp("skip")
-	asm:mov("rax", 1)
+	asm:mov(R.rax, 1)
 	asm:label("skip")
 	asm:ret()
 	local result = asm:build("uint64_t (*)(void)")()
@@ -483,13 +484,13 @@ test("basic forward jump", function(asm)
 end)
 
 test("conditional jumps", function(asm)
-	asm:mov("rax", 5)
-	asm:cmp("rax", 5)
+	asm:mov(R.rax, 5)
+	asm:cmp(R.rax, 5)
 	asm:jne("not_equal")
-	asm:mov("rax", 1)
+	asm:mov(R.rax, 1)
 	asm:jmp("end")
 	asm:label("not_equal")
-	asm:mov("rax", 0)
+	asm:mov(R.rax, 0)
 	asm:label("end")
 	asm:ret()
 	local result = asm:build("uint64_t (*)(void)")()
@@ -497,12 +498,12 @@ test("conditional jumps", function(asm)
 end)
 
 test("multiple jumps", function(asm)
-	asm:mov("rax", 0)
+	asm:mov(R.rax, 0)
 	asm:jmp("middle")
-	asm:mov("rax", 1)
+	asm:mov(R.rax, 1)
 	asm:jmp("end")
 	asm:label("middle")
-	asm:mov("rax", 2)
+	asm:mov(R.rax, 2)
 	asm:jmp("end")
 	asm:label("end")
 	asm:ret()
@@ -511,12 +512,12 @@ test("multiple jumps", function(asm)
 end)
 
 test("loop with conditional", function(asm)
-	asm:mov("rax", 0)
-	asm:mov("rcx", 5)
+	asm:mov(R.rax, 0)
+	asm:mov(R.rcx, 5)
 	asm:label("loop")
-	asm:inc("rax")
-	asm:dec("rcx")
-	asm:cmp("rcx", 0)
+	asm:inc(R.rax)
+	asm:dec(R.rcx)
+	asm:cmp(R.rcx, 0)
 	asm:jg("loop")
 	asm:ret()
 	local result = asm:build("uint64_t (*)(void)")()
@@ -524,14 +525,14 @@ test("loop with conditional", function(asm)
 end)
 
 test("forward and backward jumps", function(asm)
-	asm:mov("rax", 0)
-	asm:mov("rcx", 3)
+	asm:mov(R.rax, 0)
+	asm:mov(R.rcx, 3)
 	asm:jmp("start")
 	asm:label("loop")
-	asm:inc("rax")
-	asm:dec("rcx")
+	asm:inc(R.rax)
+	asm:dec(R.rcx)
 	asm:label("start")
-	asm:cmp("rcx", 0)
+	asm:cmp(R.rcx, 0)
 	asm:jg("loop")
 	asm:ret()
 	local result = asm:build("uint64_t (*)(void)")()
@@ -562,16 +563,13 @@ end)
 
 local asm = Assembler()
 
-expect_error(
-	function()
-		asm:mov("invalid_reg", "rax")
-	end,
-	"first argument must be a register"
-)
+expect_error(function()
+	asm:mov(R.invalid_reg, R.rax)
+end, "Invalid register")
 
 expect_error(
 	function()
-		asm:mov("rax", {index = "rcx", scale = 3})
+		asm:mov(R.rax, R({index = "rcx", scale = 3}))
 	end,
-	"is not a valid register combination"
+	"Invalid scale value"
 )
