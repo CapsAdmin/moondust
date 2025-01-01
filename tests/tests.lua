@@ -32,7 +32,15 @@ local function cmp()
 	end
 
 	function tbl:with(code)
-		equal(code, asm:debug_disassemble(), 2)
+		local a = code
+		local b = asm:debug_disassemble()
+
+		if a ~= b then
+			error(
+				"expected " .. tostring(a) .. " got: \n==asm==\n" .. tostring(b) .. "\n==asm==\n" .. "\n==hex==\n" .. tostring(asm:debug_hex()) .. "\n==hex==\n",
+				level or 2
+			)
+		end
 	end
 
 	setmetatable(tbl, tbl)
@@ -341,48 +349,30 @@ cmp():mov(R.rax, R({base = "rbx", index = "rcx", scale = 4, disp = 8})):with("mo
 cmp():mov(R.rax, R({base = "rbx", index = "rcx", scale = 4, disp = 1000})):with("mov rax,QWORD PTR [rbx+rcx*4+0x3e8]")
 cmp():mov(R.rax, R({reg = "rip", rip = true, disp = 32})):with("mov rax,QWORD PTR [rip+0x20]")
 cmp():mov(R.rax, R({reg = "rbp", disp = 0, indirect = true})):with("mov rax,QWORD PTR [rbp+0x0]")
-
-do
-	cmp():mov(R.r12, R.rdi):with("mov r12,rdi")
-	cmp():mov(R.r12, R({disp = 0x1, indirect = true})):with("mov r12,QWORD PTR ds:0x1")
-	cmp():mov(R.rcx, R.rbx):with("mov rcx,rbx")
-	cmp():mov(R.rcx, R({disp = 0x1, indirect = true})):with("mov rcx,QWORD PTR ds:0x1")
-	cmp():mov(R.rcx, R({disp = 0xdead, indirect = true})):with("mov rcx,QWORD PTR ds:0xdead")
-	cmp():mov(R.rcx, R({reg = "rbx", indirect = true})):with("mov rcx,QWORD PTR [rbx]")
-	cmp():mov(R({reg = "rcx", indirect = true}), R.rbx):with("mov QWORD PTR [rcx],rbx")
-
-	if false then
-		cmp():mov(R.rcx, R({reg = "rbx", scale = 1, indirect = true})):with("mov rcx,QWORD PTR [rbx*1]")
-		cmp():mov(R.rcx, R({reg = "rbx", scale = 2, indirect = true})):with("mov rcx,QWORD PTR [rbx*2]")
-		cmp():mov(R.rcx, R({reg = "rbx", scale = 4, indirect = true})):with("mov rcx,QWORD PTR [rbx*4]")
-		cmp():mov(R.rcx, R({reg = "rbx", scale = 8, indirect = true})):with("mov rcx,QWORD PTR [rbx*8]")
-		cmp():mov(R.rcx, R({reg = "rbx", scale = 1, disp = 0xdead, indirect = true})):with("mov rcx,QWORD PTR [rbx*1+0xdead]")
-		cmp():mov(R.rcx, R({reg = "rbx", scale = 2, disp = 0xdead, indirect = true})):with("mov rcx,QWORD PTR [rbx*2+0xdead]")
-		cmp():mov(R.rcx, R({reg = "rbx", scale = 4, disp = 0xdead, indirect = true})):with("mov rcx,QWORD PTR [rbx*4+0xdead]")
-		cmp():mov(R.rcx, R({reg = "rbx", scale = 8, disp = 0xdead, indirect = true})):with("mov rcx,QWORD PTR [rbx*8+0xdead]")
-		cmp():mov(R.rcx, R({base = "rdx", index = "rbx", scale = 1, disp = 0xdead})):with("mov rcx,QWORD PTR [rdx+rbx*1+0xdead]")
-		cmp():mov(R.rcx, R({base = "rdx", index = "rbx", scale = 2, disp = 0xdead})):with("mov rcx,QWORD PTR [rdx+rbx*2+0xdead]")
-		cmp():mov(R.rcx, R({base = "rdx", index = "rbx", scale = 4, disp = 0xdead})):with("mov rcx,QWORD PTR [rdx+rbx*4+0xdead]")
-		cmp():mov(R.rcx, R({base = "rdx", index = "rbx", scale = 8, disp = 0xdead})):with("mov rcx,QWORD PTR [rdx+rbx*8+0xdead]")
-		cmp():mov(R({reg = "rbx", scale = 1, indirect = true}), R.rcx):with("mov QWORD PTR [rbx*1],rcx")
-		cmp():mov(R({reg = "rbx", scale = 2, indirect = true}), R.rcx):with("mov QWORD PTR [rbx*2],rcx")
-		cmp():mov(R({reg = "rbx", scale = 2, disp = 0xdead, indirect = true}), "rcx"):with("mov QWORD PTR [rbx*2+0xdead],rcx")
-		cmp():mov(R({reg = "rbx", scale = 1, disp = 1024, indirect = true}), "rcx"):with("mov QWORD PTR [rbx*1+0x400],rcx")
-		cmp():mov(R.xmm1, R.xmm0):with("movsd xmm1,xmm0")
-		cmp():mov(R.rbp, nil):with("push rbp")
-		cmp():mov(R.rbp, "rsp"):with("mov rbp,rsp")
-		cmp():mov(R.rax, {disp = 1337222223, lea = true}):with("lea rax,[1337222223]")
-		cmp():mov(R.rax, nil):with("call rax")
-		cmp():mov(R.rdi, {reg = "rip", disp = 0xf * 2, lea = true}):with("lea rdi,[rip+0x1e]")
-		cmp():mov(R.rdi, {reg = "rip", disp = 0xf, lea = true}):with("lea rdi,[rip+0xf]")
-		cmp():mov(R.rdi, {reg = "rip", lea = true}):with("lea rdi,[rip]")
-		cmp():mov(R({reg = "rbp", disp = 0, indirect = true}), R.ebx):with("mov DWORD PTR [rbp],ebx")
-		cmp():mov(R({reg = "rbp", disp = 1, indirect = true}), R.ebx):with("mov DWORD PTR [rbp+0x1],ebx")
-		cmp():mov(R({reg = "rbp", disp = 123123, indirect = true}), R.ebx):with("mov DWORD PTR [rbp+0x1e0f3],ebx")
-		cmp():mov(R({reg = "rbp", indirect = true}), "ecx"):with("mov DWORD PTR [rbp],ecx")
-		cmp():mov(R({reg = "rbp", disp = 0, indirect = true}), R.ebx):with("mov DWORD PTR [rbp+0x0],ebx")
-	end
-end
+cmp():mov(R.r12, R.rdi):with("mov r12,rdi")
+cmp():mov(R.r12, R({disp = 0x1, indirect = true})):with("mov r12,QWORD PTR ds:0x1")
+cmp():mov(R.rcx, R.rbx):with("mov rcx,rbx")
+cmp():mov(R.rcx, R({disp = 0x1, indirect = true})):with("mov rcx,QWORD PTR ds:0x1")
+cmp():mov(R.rcx, R({disp = 0xdead, indirect = true})):with("mov rcx,QWORD PTR ds:0xdead")
+cmp():mov(R.rcx, R({reg = "rbx", indirect = true})):with("mov rcx,QWORD PTR [rbx]")
+cmp():mov(R({reg = "rcx", indirect = true}), R.rbx):with("mov QWORD PTR [rcx],rbx")
+cmp():mov(R.rcx, R({index = "rbx", scale = 1, indirect = true})):with("mov rcx,QWORD PTR [rbx*1+0x0]")
+cmp():mov(R.rcx, R({index = "rbx", scale = 2, indirect = true})):with("mov rcx,QWORD PTR [rbx*2+0x0]")
+cmp():mov(R.rcx, R({index = "rbx", scale = 4, indirect = true})):with("mov rcx,QWORD PTR [rbx*4+0x0]")
+cmp():mov(R.rcx, R({index = "rbx", scale = 8, indirect = true})):with("mov rcx,QWORD PTR [rbx*8+0x0]")
+cmp():mov(R.rcx, R({index = "rbx", scale = 1, disp = 0xdead, indirect = true})):with("mov rcx,QWORD PTR [rbx*1+0xdead]")
+cmp():mov(R.rcx, R({index = "rbx", scale = 2, disp = 0xdead, indirect = true})):with("mov rcx,QWORD PTR [rbx*2+0xdead]")
+cmp():mov(R.rcx, R({index = "rbx", scale = 4, disp = 0xdead, indirect = true})):with("mov rcx,QWORD PTR [rbx*4+0xdead]")
+cmp():mov(R.rcx, R({index = "rbx", scale = 8, disp = 0xdead, indirect = true})):with("mov rcx,QWORD PTR [rbx*8+0xdead]")
+cmp():mov(R.rcx, R({base = "rdx", index = "rbx", scale = 1, disp = 0xdead})):with("mov rcx,QWORD PTR [rdx+rbx*1+0xdead]")
+cmp():mov(R.rcx, R({base = "rdx", index = "rbx", scale = 2, disp = 0xdead})):with("mov rcx,QWORD PTR [rdx+rbx*2+0xdead]")
+cmp():mov(R.rcx, R({base = "rdx", index = "rbx", scale = 4, disp = 0xdead})):with("mov rcx,QWORD PTR [rdx+rbx*4+0xdead]")
+cmp():mov(R.rcx, R({base = "rdx", index = "rbx", scale = 8, disp = 0xdead})):with("mov rcx,QWORD PTR [rdx+rbx*8+0xdead]")
+cmp():mov(R({index = "rbx", scale = 1, indirect = true}), R.rcx):with("mov QWORD PTR [rbx*1+0x0],rcx")
+cmp():mov(R({index = "rbx", scale = 2, indirect = true}), R.rcx):with("mov QWORD PTR [rbx*2+0x0],rcx")
+cmp():mov(R({index = "rbx", scale = 2, disp = 0xdead, indirect = true}), R.rcx):with("mov QWORD PTR [rbx*2+0xdead],rcx")
+cmp():mov(R({index = "rbx", scale = 1, disp = 1024, indirect = true}), R.rcx):with("mov QWORD PTR [rbx*1+0x400],rcx")
+cmp():mov(R.rbp, R.rsp):with("mov rbp,rsp")
 
 test("additional mov scenarios", function(asm)
 	for _, reg in ipairs({

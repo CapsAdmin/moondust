@@ -42,17 +42,6 @@ function Assembler:build(cdef)
 	return ptr
 end
 
-function Assembler:debug_print_hex()
-	-- Print raw hex of current machine code
-	local hex = {}
-
-	for i = 1, self.pos - 1 do
-		table.insert(hex, string.format("%02X", self.code[i]:byte()))
-	end
-
-	return table.concat(hex, " ")
-end
-
 function Assembler:debug_disassemble()
 	local dissassemble = require("moondust.disassemble")
 	return dissassemble(table.concat(self.code))

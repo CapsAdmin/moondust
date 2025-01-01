@@ -1,11 +1,9 @@
 local function disassemble(str)
-	-- Write machine code to temp file
 	local temp_bin = os.tmpname and os.tmpname() or "/tmp/asm_debug.bin"
 	local temp_asm = os.tmpname and os.tmpname() or "/tmp/asm_debug.asm"
 	local f = assert(io.open(temp_bin, "wb"))
 	f:write(str)
 	f:close()
-	-- Use appropriate disassembler based on OS
 	local output
 	local tbl = {}
 
