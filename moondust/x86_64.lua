@@ -1,3 +1,4 @@
+-- moondust x64 assembler
 return function(Assembler)
 	do
 		local reginfo = {}
@@ -332,18 +333,17 @@ return function(Assembler)
 
 	do
 		do
-			local RIP_RELATIVE = 5
+			local MOD_NO_DISP = 0
+			local MOD_DISP8 = 1
+			local MOD_DISP32 = 2
+			local MOD_REG = 3
 			local SIB_INDICATOR = 4
 			local NO_INDEX = 4
 			local NO_BASE = 5
-			local NO_DISP = 0
-			local DISP8 = 1
-			local DISP32 = 2
-			local REG_TO_REG = 3
-			local scale_bits = {[1] = 0b00, [2] = 0b01, [4] = 0b10, [8] = 0b11}
+			local RIP_RELATIVE = 5
+			local scale_bits = {[1] = 0x00, [2] = 0x40, [4] = 0x80, [8] = 0xC0}
 
 			local function encode_modrm(mod, reg, rm)
-				assert(mod >= 0 and mod <= 3, "Invalid mod value")
 				return bit.bor(
 					bit.lshift(bit.band(mod, 0x3), 6),
 					bit.lshift(bit.band(reg.i, 0x7), 3),
@@ -352,107 +352,69 @@ return function(Assembler)
 			end
 
 			local function encode_sib(scale, index, base)
-				return bit.bor(
-					bit.lshift(scale_bits[scale or 1], 6),
-					bit.lshift(bit.band(index and index.i or NO_INDEX, 0x7), 3),
-					bit.band(base and base.i or NO_BASE, 0x7)
-				)
-			end
-
-			local function encode_modrm_abs(reg)
-				-- For absolute addressing, mod=00, rm=100 (binary 100 = 4)
-				-- This creates the standard ModR/M pattern for absolute addressing: 00rrr100
-				return bit.bor(bit.lshift(bit.band(reg.i, 0x7), 3), 0x04 -- rm = 100 for SIB
-				)
-			end
-
-			local function encode_sib_abs()
-				-- For absolute addressing with no base/index:
-				-- scale = 00, index = 100 (none), base = 101 (none)
-				return 0x25 -- 00 100 101 in binary
+				local scale_val = scale_bits[scale or 1]
+				local index_val = bit.lshift(bit.band((index and index.i or NO_INDEX), 0x7), 3)
+				local base_val = bit.band((base and base.i or NO_BASE), 0x7)
+				return bit.bor(scale_val, index_val, base_val)
 			end
 
 			function Assembler:emit_modrm_sib(reg1, reg2)
 				if reg2.indirect and reg2.disp and not reg2.reg and not reg2.base and not reg2.index then
-					-- This is an absolute memory reference
-					self:emit(encode_modrm_abs(reg1))
-					self:emit(encode_sib_abs())
+					self:emit(bit.bor(bit.lshift(bit.band(reg1.i, 0x7), 3), SIB_INDICATOR))
+					self:emit(0x25)
 					self:emit_i32(reg2.disp)
 					return
 				elseif reg1.indirect and reg1.disp and not reg1.reg and not reg1.base and not reg1.index then
-					-- Handle store to absolute address
-					self:emit(encode_modrm_abs(reg2))
-					self:emit(encode_sib_abs())
+					self:emit(bit.bor(bit.lshift(bit.band(reg2.i, 0x7), 3), SIB_INDICATOR))
+					self:emit(0x25)
 					self:emit_i32(reg1.disp)
 					return
 				end
 
-				if reg2.indirect and reg2.disp and not reg2.reg and not reg2.base and not reg2.index then
-					self:emit(encode_modrm(0, reg1, {i = SIB_INDICATOR}))
-					self:emit(0x25)
-					self:emit_i32(reg2.disp)
+				if not reg2.indirect and not reg2.index and not reg2.scale and not reg2.rip then
+					self:emit(encode_modrm(MOD_REG, reg1, reg2))
 					return
 				end
-
-				if
-					not reg2.indirect and
-					not reg2.index and
-					not reg2.scale and
-					not reg2.rip and
-					reg1 and
-					reg2
-				then
-					self:emit(encode_modrm(REG_TO_REG, reg1, reg2))
-					return
-				end
-
-				local mod
-				local effective_disp
 
 				if reg2.rip then
-					mod = NO_DISP
-					self:emit(encode_modrm(mod, reg1, {i = RIP_RELATIVE}))
+					self:emit(encode_modrm(MOD_NO_DISP, reg1, {i = RIP_RELATIVE}))
 					self:emit_i32(reg2.disp or 0)
 					return
 				end
 
+				if reg2.index and reg2.scale and not reg2.base then
+					self:emit(encode_modrm(MOD_NO_DISP, reg1, {i = SIB_INDICATOR}))
+					self:emit(encode_sib(reg2.scale, self.Registers[reg2.index], {i = NO_BASE}))
+					self:emit_i32(reg2.disp or 0)
+					return
+				end
+
+				local mod, effective_disp = MOD_NO_DISP, nil
 				local disp = reg2.disp
 				local is_bp = reg2.reg and (reg2.reg == "ebp" or reg2.reg == "rbp")
 
 				if not disp and reg2.reg and (is_bp or reg2.reg == "r13") then
-					mod = DISP8
-					effective_disp = 0
+					mod, effective_disp = MOD_DISP8, 0
 				elseif not disp or (disp == 0 and not is_bp) then
-					mod = NO_DISP
+					mod = MOD_NO_DISP
 				elseif disp >= -128 and disp <= 127 then
-					mod = DISP8
-					effective_disp = disp
+					mod, effective_disp = MOD_DISP8, disp
 				else
-					mod = DISP32
-					effective_disp = disp
+					mod, effective_disp = MOD_DISP32, disp
 				end
 
-				if reg2.index and reg2.scale and not reg2.base then
-					self:emit(encode_modrm(NO_DISP, reg1, {i = SIB_INDICATOR}))
-					self:emit(encode_sib(reg2.scale, self.Registers[reg2.index], {i = NO_BASE}))
-					effective_disp = reg2.disp or 0
-					mod = DISP32
+				if reg2.index or reg2.scale or reg2.reg == "rsp" or reg2.reg == "esp" then
+					self:emit(encode_modrm(mod, reg1, {i = SIB_INDICATOR}))
+					local index_reg = reg2.index and self.Registers[reg2.index] or nil
+					local base_reg = reg2.base and self.Registers[reg2.base] or reg2
+					self:emit(encode_sib(reg2.scale, index_reg, base_reg))
 				else
-					if reg2.index or reg2.scale or is_sp then
-						self:emit(encode_modrm(mod, reg1, {i = SIB_INDICATOR}))
-						local index_reg = reg2.index and self.Registers[reg2.index] or nil
-						local base_reg = reg2.base and self.Registers[reg2.base] or reg2
-						self:emit(encode_sib(reg2.scale, index_reg, base_reg))
-					else
-						self:emit(encode_modrm(mod, reg1, reg2))
-					end
+					self:emit(encode_modrm(mod, reg1, reg2))
 				end
 
-				if reg2.reg == "rip" then
-					self:emit_i32(effective_disp)
-				elseif mod == DISP8 then
+				if mod == MOD_DISP8 then
 					self:emit_i8(effective_disp)
-				elseif mod == DISP32 then
+				elseif mod == MOD_DISP32 then
 					self:emit_i32(effective_disp)
 				end
 			end
