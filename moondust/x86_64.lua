@@ -112,7 +112,9 @@ return function(Assembler)
 		end
 
 		local function REG(val)
-			if type(val) == "string" then
+			if tonumber(val) then
+				return {disp = val, indirect = true}
+			elseif type(val) == "string" then
 				validate_register_name(val)
 				local new = {reg = val}
 
@@ -174,45 +176,110 @@ return function(Assembler)
 		Register.__index = Register
 
 		function Register:__tostring()
-			local parts = {}
+			if self.reg then
+				if self.indirect then
+					if self.disp then
+						return "[" .. self.reg .. " " .. (
+								self.disp >= 0 and
+								"+" or
+								"-"
+							) .. " " .. math.abs(self.disp) .. "]"
+					end
 
-			if self.reg then table.insert(parts, self.reg) end
+					return "[" .. self.reg .. "]"
+				end
 
-			if self.index then
-				table.insert(parts, self.index)
-
-				if self.scale then table.insert(parts, "*" .. self.scale) end
+				return self.reg
 			end
 
-			if self.disp then table.insert(parts, tostring(self.disp)) end
+			local str = "["
 
-			return table.concat(parts, " + ")
+			if self.base then str = str .. self.base end
+
+			if self.index then
+				if self.base then str = str .. " + " end
+
+				str = str .. self.index
+			end
+
+			if self.scale then str = str .. "*" .. self.scale end
+
+			if self.disp then
+				str = str .. " " .. (self.disp >= 0 and "+" or "-") .. " " .. math.abs(self.disp)
+			end
+
+			str = str .. "]"
+			return str
+		end
+
+		local function copy(self)
+			local new = {}
+
+			for k, v in pairs(self) do
+				new[k] = v
+			end
+
+			return new
 		end
 
 		function Register:__mul(scale)
-			validate_scale(scale)
-			local new = {}
-
-			for k, v in pairs(self) do
-				new[k] = v
-			end
-
+			local new = copy(self)
+			new.indirect = true
+			new.reg = nil
+			new.index = self.reg or self.index
 			new.scale = scale
-			validate_combinations(new)
-			return new
+			return Register.new(new)
 		end
 
-		function Register:__add(disp)
-			validate_displacement(disp)
-			local new = {}
+		function Register:__add(other)
+			local new = copy(self)
+			new.indirect = true
+			new.reg = nil
 
-			for k, v in pairs(self) do
-				new[k] = v
+			if type(other) == "number" then
+				if self.rip then
+					local new = copy(self)
+					new.disp = other
+					return Register.new(new)
+				elseif self.index then
+					-- We already have an index operation, just add displacement
+					new.disp = other
+				else
+					-- Simple base + displacement
+					new.reg = self.reg
+					new.disp = other
+					new.base = self.reg or self.base
+				end
+			else
+				-- Handle register addition
+				if self.index then
+					-- If we already have an index, preserve it and add base
+					new.base = other.reg
+				else
+					if other.scale then
+						-- If other has scale, it's an index operation
+						new.base = self.reg
+						new.index = other.index
+						new.scale = other.scale
+					else
+						-- Simple base + index
+						new.base = self.reg
+						new.index = other.reg
+					end
+				end
 			end
 
-			new.disp = disp
-			validate_combinations(new)
-			return new
+			return Register.new(new)
+		end
+
+		function Register:__sub(other)
+			return self:__add(-other)
+		end
+
+		function Register:memory_address()
+			local new = copy(self)
+			new.indirect = true
+			return Register.new(new)
 		end
 
 		function Register.new(val)
@@ -817,7 +884,7 @@ return function(Assembler)
 	end
 
 	do
-		function Assembler:emit_opext(extension, rm, mod)
+		local function emit_opext(self, extension, rm, mod)
 			local modrm = bit.bor(
 				bit.lshift(bit.band(mod or 3, 0x3), 6),
 				bit.lshift(bit.band(extension, 0x7), 3),
@@ -827,48 +894,39 @@ return function(Assembler)
 		end
 
 		function Assembler:xor(reg1, reg2)
-			if reg1.bits == 64 then
-				self:rex(true, reg1.is_extended, reg2.is_extended, false)
-				self:emit(0x33)
-				self:emit_modrm_sib(reg1, reg2)
-			else
-				error("xor only supports 64-bit registers")
-			end
+			assert(reg1.bits == 64, "only supports 64-bit registers")
+			self:rex(true, reg1.is_extended, reg2.is_extended, false)
+			self:emit(0x33)
+			self:emit_modrm_sib(reg1, reg2)
 		end
 
 		function Assembler:inc(reg)
-			if reg.bits == 64 then
-				self:rex(true, reg.is_extended, false, false)
-				self:emit(0xFF)
-				self:emit_opext(0, reg)
-			else
-				error("inc only supports 64-bit registers")
-			end
+			assert(reg.bits == 64, "only supports 64-bit registers")
+			self:rex(true, reg.is_extended, false, false)
+			self:emit(0xFF)
+			emit_opext(self, 0, reg)
 		end
 
 		function Assembler:dec(reg)
-			if reg.bits == 64 then
-				self:rex(true, reg.is_extended, false, false)
-				self:emit(0xFF)
-				self:emit_opext(1, reg)
-			else
-				error("dec only supports 64-bit registers")
-			end
+			assert(reg.bits == 64, "only supports 64-bit registers")
+			self:rex(true, reg.is_extended, false, false)
+			self:emit(0xFF)
+			emit_opext(self, 1, reg)
 		end
 
 		function Assembler:cmp(reg1, op2)
-			assert(reg1.bits == 64)
+			assert(reg1.bits == 64, "only supports 64-bit registers")
 
 			if type(op2) == "number" then
 				self:rex(true, reg1.is_extended, false, false)
 
 				if op2 >= -128 and op2 <= 127 then
 					self:emit(0x83)
-					self:emit_opext(7, reg1)
+					emit_opext(self, 7, reg1)
 					self:emit_i8(op2)
 				else
 					self:emit(0x81)
-					self:emit_opext(7, reg1)
+					emit_opext(self, 7, reg1)
 					self:emit_i32(op2)
 				end
 			else
@@ -887,11 +945,11 @@ return function(Assembler)
 
 				if op2 >= -128 and op2 <= 127 then
 					self:emit(0x83)
-					self:emit_opext(0, reg1)
+					emit_opext(self, 0, reg1)
 					self:emit_i8(op2)
 				else
 					self:emit(0x81)
-					self:emit_opext(0, reg1)
+					emit_opext(self, 0, reg1)
 					self:emit_i32(op2)
 				end
 			else
@@ -906,7 +964,7 @@ return function(Assembler)
 			assert(reg.bits == 64)
 			self:rex(true, reg.is_extended, false, false)
 			self:emit(0xF7)
-			self:emit_opext(4, reg)
+			emit_opext(self, 4, reg)
 		end
 
 		function Assembler:shl(reg1, op2)
@@ -917,10 +975,10 @@ return function(Assembler)
 
 				if op2 == 1 then
 					self:emit(0xD1)
-					self:emit_opext(4, reg1)
+					emit_opext(self, 4, reg1)
 				else
 					self:emit(0xC1)
-					self:emit_opext(4, reg1)
+					emit_opext(self, 4, reg1)
 					self:emit_i8(op2)
 				end
 			else
@@ -932,7 +990,7 @@ return function(Assembler)
 
 				self:rex(true, reg1.is_extended, false, false)
 				self:emit(0xD3)
-				self:emit_opext(4, reg1)
+				emit_opext(self, 4, reg1)
 			end
 		end
 
@@ -944,11 +1002,11 @@ return function(Assembler)
 
 				if op2 >= -128 and op2 <= 127 then
 					self:emit(0x83)
-					self:emit_opext(5, reg1)
+					emit_opext(self, 5, reg1)
 					self:emit_i8(op2)
 				else
 					self:emit(0x81)
-					self:emit_opext(5, reg1)
+					emit_opext(self, 5, reg1)
 					self:emit_i32(op2)
 				end
 			else
