@@ -25,6 +25,10 @@ function Assembler:emit(...)
 	end
 end
 
+function Assembler:size()
+	return self.pos
+end
+
 function Assembler:emit_string(str)
 	for i = 1, #str do
 		local char = str:sub(i, i)
@@ -33,8 +37,12 @@ function Assembler:emit_string(str)
 	end
 end
 
+function Assembler:compile()
+	return self:resolve_labels(table.concat(self.code))
+end
+
 function Assembler:build(cdef)
-	local code = self:resolve_labels(table.concat(self.code))
+	local code = self:compile()
 	local ptr = assert(memory.make_executable(code))
 
 	if cdef then return ffi.cast(cdef, ptr) end

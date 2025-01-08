@@ -3,7 +3,9 @@ local memory = {}
 
 function memory.object_to_address(var)
 	if type(var) == "cdata" or type(var) == "string" then
-		return ffi.cast("uintptr_t", var)
+		local ok, address = pcall(ffi.cast, "uintptr_t", var)
+
+		if ok then return address end
 	end
 
 	return loadstring("return " .. string.format("%p", var) .. "ULL")()

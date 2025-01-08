@@ -113,6 +113,85 @@ do
 	equal(tostring(R.rax + R.rbx * 4 + 0x1), "[rax + rbx*4 + 1]")
 end
 
+do
+	do -- pure displacement / memory offset / moff
+		do
+			cmp():mov(R.rbx, R(0x123456789abcdef0ULL)):with("movabs rbx,0x123456789abcdef0\nmov rbx,QWORD PTR [rbx]")
+			cmp():mov(R(0x123456789abcdef0ULL), R.rbx):with("push\nmovabs r11,0x123456789abcdef0\nmov QWORD PTR [r11],rbx\npop")
+			cmp():mov(R.rax, R(0x123456789abcdef0ULL)):with("movabs rax,ds:0x123456789abcdef0")
+			cmp():mov(R(0x123456789abcdef0ULL), R.rax):with("movabs ds:0x123456789abcdef0,rax")
+		end
+
+		cmp():mov(R.rcx, R(0xdead)):with("mov rcx,QWORD PTR ds:0xdead")
+		cmp():mov(R.r12, R(1)):with("mov r12,QWORD PTR ds:0x1")
+		cmp():mov(R.rax, R(1ull)):with("movabs rax,ds:0x1") -- rax can use 64 bit displacement
+		cmp():mov(R(1ull), R.rax):with("movabs ds:0x1,rax") -- rax can use 64 bit displacement
+		cmp():mov(R.r10, R(1ull)):with("movabs r10,0x1\nmov r10,QWORD PTR [r10]")
+		cmp():mov(R(1ull), R.r12):with("push\nmovabs r11,0x1\nmov QWORD PTR [r11],r12\npop")
+	end
+
+	cmp():mov(R.rbx, R.rax):with("mov rbx,rax")
+	cmp():mov(R.rax, R.rcx:memory_address()):with("mov rax,QWORD PTR [rcx]")
+	cmp():mov(R.rax, R.rdx + 0x8):with("mov rax,QWORD PTR [rdx+0x8]")
+	cmp():mov(R.rax, R.rbx + 1000):with("mov rax,QWORD PTR [rbx+0x3e8]")
+	cmp():mov(R.rax, R.rcx * 4):with("mov rax,QWORD PTR [rcx*4+0x0]")
+	cmp():mov(R.rax, R.rbx + R.rcx * 4):with("mov rax,QWORD PTR [rbx+rcx*4]")
+	cmp():mov(R.rax, R.rbx + R.rcx * 4 + 8):with("mov rax,QWORD PTR [rbx+rcx*4+0x8]")
+	cmp():mov(R.rax, R.rbx + R.rcx * 4 + 1000):with("mov rax,QWORD PTR [rbx+rcx*4+0x3e8]")
+	cmp():mov(R.rax, R.rip + 32):with("mov rax,QWORD PTR [rip+0x20]")
+	cmp():mov(R.r12, R.rdi):with("mov r12,rdi")
+	cmp():mov(R.r12, R.r12:memory_address()):with("mov r12,QWORD PTR [r12]")
+	cmp():mov(R.rcx, R.rbx):with("mov rcx,rbx")
+	cmp():mov(R.rcx, R.rbx):with("mov rcx,rbx")
+	cmp():mov(R.rcx, R.rbx * 1):with("mov rcx,QWORD PTR [rbx*1+0x0]")
+	cmp():mov(R.rcx, R.rbx * 2):with("mov rcx,QWORD PTR [rbx*2+0x0]")
+	cmp():mov(R.rcx, R.rbx * 4):with("mov rcx,QWORD PTR [rbx*4+0x0]")
+	cmp():mov(R.rcx, R.rbx * 8):with("mov rcx,QWORD PTR [rbx*8+0x0]")
+	cmp():mov(R.rcx, R.rbx * 1 + 0xdead):with("mov rcx,QWORD PTR [rbx*1+0xdead]")
+	cmp():mov(R.rcx, R.rbx * 2 + 0xdead):with("mov rcx,QWORD PTR [rbx*2+0xdead]")
+	cmp():mov(R.rcx, R.rbx * 4 + 0xdead):with("mov rcx,QWORD PTR [rbx*4+0xdead]")
+	cmp():mov(R.rcx, R.rbx * 8 + 0xdead):with("mov rcx,QWORD PTR [rbx*8+0xdead]")
+	cmp():mov(R.rcx, R.rdx + R.rbx * 1 + 0xdead):with("mov rcx,QWORD PTR [rdx+rbx*1+0xdead]")
+	cmp():mov(R.rcx, R.rdx + R.rbx * 2 + 0xdead):with("mov rcx,QWORD PTR [rdx+rbx*2+0xdead]")
+	cmp():mov(R.rcx, R.rdx + R.rbx * 4 + 0xdead):with("mov rcx,QWORD PTR [rdx+rbx*4+0xdead]")
+	cmp():mov(R.rcx, R.rdx + R.rbx * 8 + 0xdead):with("mov rcx,QWORD PTR [rdx+rbx*8+0xdead]")
+	cmp():mov(R(R.rbx * 1), R.rcx):with("mov QWORD PTR [rbx*1+0x0],rcx")
+	cmp():mov(R(R.rbx * 2), R.rcx):with("mov QWORD PTR [rbx*2+0x0],rcx")
+	cmp():mov(R(R.rbx * 2 + 0xdead), R.rcx):with("mov QWORD PTR [rbx*2+0xdead],rcx")
+	cmp():mov(R(R.rbx * 1 + 1024), R.rcx):with("mov QWORD PTR [rbx*1+0x400],rcx")
+	cmp():mov(R.rbp, R.rsp):with("mov rbp,rsp")
+	cmp():mov(R.rax, R.rbp + 0):with("mov rax,QWORD PTR [rbp+0x0]")
+
+	do
+		cmp():mov(R.rbx, R.rax * 1):with("mov rbx,QWORD PTR [rax*1+0x0]")
+		cmp():mov(R.rbx, R.rax * 2):with("mov rbx,QWORD PTR [rax*2+0x0]")
+	end
+end
+
+do
+	local cpuid = require("moondust.cpuid")
+
+	test("cpuid", function(asm)
+		print("")
+		local cpu_info = cpuid()
+
+		local function tprint(tbl, level)
+			level = level or 0
+
+			for k, v in pairs(tbl) do
+				if type(v) == "table" then
+					print(("\t"):rep(level) .. k .. ": ")
+					tprint(v, level + 1)
+				else
+					print(("\t"):rep(level) .. k .. ": " .. tostring(v))
+				end
+			end
+		end
+
+		tprint(cpu_info)
+	end)
+end
+
 if false then
 	test("write std out", function(asm)
 		local msg = "hello world\n"
@@ -237,17 +316,32 @@ end)
 
 test("mov reg pointer roundtrip", function()
 	for _, val in ipairs(test_values) do
-		local mem = ffi.new("uint64_t[1]")
+		local mem = ffi.new("uint64_t[1]", val)
 		local asm = Assembler()
-		asm:push(R.rbx)
-		asm:mov(R.rbx, val)
-		asm:mov(R(memory.object_to_address(mem)), R.rbx)
 		asm:mov(R.rax, R(memory.object_to_address(mem)))
-		asm:pop(R.rbx)
+		asm:mov(R(memory.object_to_address(mem)), R.rax)
+		asm:mov(R.rax, R(memory.object_to_address(mem)))
 		asm:ret()
 		local result = asm:build("uint64_t (*)(void)")()
 
 		if result ~= val then
+			print(asm:debug_disassemble())
+			print(asm:debug_hex())
+			error(string.format("Memory round trip failed - Expected 0x%x, got 0x%x", val, result))
+		end
+	end
+
+	for _, val in ipairs(test_values) do
+		local mem = ffi.new("uint64_t[1]", val)
+		local asm = Assembler()
+		asm:mov(R.r9, R(memory.object_to_address(mem)))
+		asm:mov(R.rax, R.r9)
+		asm:ret()
+		local result = asm:build("uint64_t (*)(void)")()
+
+		if result ~= val then
+			print(asm:debug_disassemble())
+			print(asm:debug_hex())
 			error(string.format("Memory round trip failed - Expected 0x%x, got 0x%x", val, result))
 		end
 	end
@@ -351,45 +445,6 @@ test("sse store", function(asm)
 		)
 	end
 end)
-
-cmp():mov(R.rbx, R.rax):with("mov rbx,rax")
-cmp():mov(R.rax, R.rcx:memory_address()):with("mov rax,QWORD PTR [rcx]")
-cmp():mov(R.rax, R.rdx + 0x8):with("mov rax,QWORD PTR [rdx+0x8]")
-cmp():mov(R.rax, R.rbx + 1000):with("mov rax,QWORD PTR [rbx+0x3e8]")
-cmp():mov(R.rax, R.rcx * 4):with("mov rax,QWORD PTR [rcx*4+0x0]")
-cmp():mov(R.rax, R.rbx + R.rcx * 4):with("mov rax,QWORD PTR [rbx+rcx*4]")
-cmp():mov(R.rax, R.rbx + R.rcx * 4 + 8):with("mov rax,QWORD PTR [rbx+rcx*4+0x8]")
-cmp():mov(R.rax, R.rbx + R.rcx * 4 + 1000):with("mov rax,QWORD PTR [rbx+rcx*4+0x3e8]")
-cmp():mov(R.rax, R.rip + 32):with("mov rax,QWORD PTR [rip+0x20]")
-cmp():mov(R.r12, R.rdi):with("mov r12,rdi")
-cmp():mov(R.r12, R(1)):with("mov r12,QWORD PTR ds:0x1")
-cmp():mov(R.rcx, R.rbx):with("mov rcx,rbx")
-cmp():mov(R.rcx, R(1)):with("mov rcx,QWORD PTR ds:0x1")
-cmp():mov(R.rcx, R(0xdead)):with("mov rcx,QWORD PTR ds:0xdead")
-cmp():mov(R.rcx, R.rbx):with("mov rcx,rbx")
-cmp():mov(R.rcx, R.rbx * 1):with("mov rcx,QWORD PTR [rbx*1+0x0]")
-cmp():mov(R.rcx, R.rbx * 2):with("mov rcx,QWORD PTR [rbx*2+0x0]")
-cmp():mov(R.rcx, R.rbx * 4):with("mov rcx,QWORD PTR [rbx*4+0x0]")
-cmp():mov(R.rcx, R.rbx * 8):with("mov rcx,QWORD PTR [rbx*8+0x0]")
-cmp():mov(R.rcx, R.rbx * 1 + 0xdead):with("mov rcx,QWORD PTR [rbx*1+0xdead]")
-cmp():mov(R.rcx, R.rbx * 2 + 0xdead):with("mov rcx,QWORD PTR [rbx*2+0xdead]")
-cmp():mov(R.rcx, R.rbx * 4 + 0xdead):with("mov rcx,QWORD PTR [rbx*4+0xdead]")
-cmp():mov(R.rcx, R.rbx * 8 + 0xdead):with("mov rcx,QWORD PTR [rbx*8+0xdead]")
-cmp():mov(R.rcx, R.rdx + R.rbx * 1 + 0xdead):with("mov rcx,QWORD PTR [rdx+rbx*1+0xdead]")
-cmp():mov(R.rcx, R.rdx + R.rbx * 2 + 0xdead):with("mov rcx,QWORD PTR [rdx+rbx*2+0xdead]")
-cmp():mov(R.rcx, R.rdx + R.rbx * 4 + 0xdead):with("mov rcx,QWORD PTR [rdx+rbx*4+0xdead]")
-cmp():mov(R.rcx, R.rdx + R.rbx * 8 + 0xdead):with("mov rcx,QWORD PTR [rdx+rbx*8+0xdead]")
-cmp():mov(R(R.rbx * 1), R.rcx):with("mov QWORD PTR [rbx*1+0x0],rcx")
-cmp():mov(R(R.rbx * 2), R.rcx):with("mov QWORD PTR [rbx*2+0x0],rcx")
-cmp():mov(R(R.rbx * 2 + 0xdead), R.rcx):with("mov QWORD PTR [rbx*2+0xdead],rcx")
-cmp():mov(R(R.rbx * 1 + 1024), R.rcx):with("mov QWORD PTR [rbx*1+0x400],rcx")
-cmp():mov(R.rbp, R.rsp):with("mov rbp,rsp")
-cmp():mov(R.rax, R.rbp + 0):with("mov rax,QWORD PTR [rbp+0x0]")
-
-do
-	cmp():mov(R.rbx, R.rax * 1):with("mov rbx,QWORD PTR [rax*1+0x0]")
-	cmp():mov(R.rbx, R.rax * 2):with("mov rbx,QWORD PTR [rax*2+0x0]")
-end
 
 test("additional mov scenarios", function(asm)
 	for _, reg in ipairs({
@@ -577,3 +632,33 @@ end, "Invalid register")
 expect_error(function()
 	asm:mov(R.rax, R.rcx * 3)
 end, "Invalid scale value")
+
+test("debug interrupt", function(asm)
+	local old_value = nil
+
+	asm:debug(function(state)
+		old_value = state.r15
+	end)
+
+	asm:push(R.r15)
+	asm:mov(R.r15, 2)
+
+	asm:debug(function(state)
+		assert(state.r15 == 2ull)
+	end)
+
+	asm:mov(R.r15, 3)
+
+	asm:debug(function(state)
+		assert(state.r15 == 3ull)
+	end)
+
+	asm:pop(R.r15)
+
+	asm:debug(function(state)
+		assert(state.r15 == old_value)
+	end)
+
+	asm:ret()
+	asm:build("uint64_t (*)(void)")()
+end)
