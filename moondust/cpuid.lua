@@ -4,10 +4,6 @@ local bit = require("bit")
 local Assembler = require("moondust.assembler")
 local R = Assembler.Registers
 local M = memory.object_to_address
-ffi.cdef[[
-void *malloc(size_t);
-void free(void *);
-]]
 
 -- Utility function to convert register values to strings
 local function bytes_to_string(value)
@@ -22,7 +18,7 @@ end
 
 -- Core CPUID function
 local function cpuid(leaf, subleaf)
-	local res = ffi.cast("uint32_t*", ffi.C.malloc(ffi.sizeof("uint32_t") * 4))
+	local res = memory.malloc("uint32_t*", ffi.sizeof("uint32_t") * 4)
 	local asm = Assembler.new()
 	-- Save registers
 	asm:push(R.rax)
@@ -47,7 +43,7 @@ local function cpuid(leaf, subleaf)
 	-- Execute assembled code
 	asm:build("void(*)(void)")()
 	local a, b, c, d = res[0], res[1], res[2], res[3]
-	ffi.C.free(res)
+	memory.free(res)
 	return a, b, c, d
 end
 

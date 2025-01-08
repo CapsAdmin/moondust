@@ -1,4 +1,13 @@
 -- moondust x64 assembler
+local MOD_NO_DISP = 0
+local MOD_DISP8 = 1
+local MOD_DISP32 = 2
+local MOD_REG = 3
+local SIB_INDICATOR = 4
+local NO_INDEX = 4
+local NO_BASE = 5
+local RIP_RELATIVE = 5
+local scale_bits = {[1] = 0x00, [2] = 0x40, [4] = 0x80, [8] = 0xC0}
 return function(Assembler)
 	do -- registers
 		local reginfo = {}
@@ -214,7 +223,17 @@ return function(Assembler)
 			if self.scale then str = str .. "*" .. self.scale end
 
 			if self.disp then
-				str = str .. " " .. (self.disp >= 0 and "+" or "-") .. " " .. math.abs(self.disp)
+				str = str .. " " .. (
+						self.disp >= 0 and
+						"+" or
+						"-"
+					) .. " " .. (
+						type(self.disp) == "cdata" and
+						(
+							"%p"
+						):format(self.disp) or
+						math.abs(self.disp)
+					)
 			end
 
 			str = str .. "]"
@@ -318,6 +337,23 @@ return function(Assembler)
 	local R = Assembler.Registers
 
 	do -- encoding helpers
+		function Assembler:emit_modrm(mod, reg, rm)
+			self:emit(
+				bit.bor(
+					bit.lshift(bit.band(mod or 3, 0x3), 6),
+					bit.lshift(bit.band(reg, 0x7), 3),
+					bit.band(rm, 0x7)
+				)
+			)
+		end
+
+		function Assembler:emit_sib(scale, index, base)
+			local scale_val = scale_bits[scale or 1]
+			local index_val = bit.lshift(bit.band((index or NO_INDEX), 0x7), 3)
+			local base_val = bit.band((base or NO_BASE), 0x7)
+			self:emit(bit.bor(scale_val, index_val, base_val))
+		end
+
 		function Assembler:rex(_64bit_reg, B, R, X)
 			local rex = 0b01000000
 
@@ -349,31 +385,6 @@ return function(Assembler)
 			if rex ~= 0b01000000 then self:emit(rex) end
 		end
 
-		local MOD_NO_DISP = 0
-		local MOD_DISP8 = 1
-		local MOD_DISP32 = 2
-		local MOD_REG = 3
-		local SIB_INDICATOR = 4
-		local NO_INDEX = 4
-		local NO_BASE = 5
-		local RIP_RELATIVE = 5
-		local scale_bits = {[1] = 0x00, [2] = 0x40, [4] = 0x80, [8] = 0xC0}
-
-		local function encode_modrm(mod, reg, rm)
-			return bit.bor(
-				bit.lshift(bit.band(mod, 0x3), 6),
-				bit.lshift(bit.band(reg.i, 0x7), 3),
-				bit.band(rm.i, 0x7)
-			)
-		end
-
-		local function encode_sib(scale, index, base)
-			local scale_val = scale_bits[scale or 1]
-			local index_val = bit.lshift(bit.band((index and index.i or NO_INDEX), 0x7), 3)
-			local base_val = bit.band((base and base.i or NO_BASE), 0x7)
-			return bit.bor(scale_val, index_val, base_val)
-		end
-
 		function Assembler:emit_modrm_sib(reg1, reg2)
 			if reg2.indirect and reg2.disp and not reg2.reg and not reg2.base and not reg2.index then
 				self:emit(bit.bor(bit.lshift(bit.band(reg1.i, 0x7), 3), SIB_INDICATOR))
@@ -388,26 +399,26 @@ return function(Assembler)
 			end
 
 			if not reg2.indirect and not reg2.index and not reg2.scale and not reg2.rip then
-				self:emit(encode_modrm(MOD_REG, reg1, reg2))
+				self:emit_modrm(MOD_REG, reg1.i, reg2.i)
 				return
 			end
 
 			-- Special case: r12/rsp used as base requires SIB byte
 			if reg2.indirect and (reg2.reg == "r12" or reg2.reg == "rsp") then
-				self:emit(encode_modrm(MOD_NO_DISP, reg1, {i = SIB_INDICATOR}))
-				self:emit(encode_sib(1, nil, reg2))
+				self:emit_modrm(MOD_NO_DISP, reg1.i, SIB_INDICATOR)
+				self:emit_sib(1, nil, reg2.i)
 				return
 			end
 
 			if reg2.rip then
-				self:emit(encode_modrm(MOD_NO_DISP, reg1, {i = RIP_RELATIVE}))
+				self:emit_modrm(MOD_NO_DISP, reg1.i, RIP_RELATIVE)
 				self:emit_i32(reg2.disp or 0)
 				return
 			end
 
 			if reg2.index and reg2.scale and not reg2.base then
-				self:emit(encode_modrm(MOD_NO_DISP, reg1, {i = SIB_INDICATOR}))
-				self:emit(encode_sib(reg2.scale, self.Registers[reg2.index], {i = NO_BASE}))
+				self:emit_modrm(MOD_NO_DISP, reg1.i, SIB_INDICATOR)
+				self:emit_sib(reg2.scale, self.Registers[reg2.index].i, NO_BASE)
 				self:emit_i32(reg2.disp or 0)
 				return
 			end
@@ -427,12 +438,12 @@ return function(Assembler)
 			end
 
 			if reg2.index or reg2.scale or reg2.reg == "rsp" or reg2.reg == "esp" then
-				self:emit(encode_modrm(mod, reg1, {i = SIB_INDICATOR}))
+				self:emit_modrm(mod, reg1.i, SIB_INDICATOR)
 				local index_reg = reg2.index and self.Registers[reg2.index] or nil
 				local base_reg = reg2.base and self.Registers[reg2.base] or reg2
-				self:emit(encode_sib(reg2.scale, index_reg, base_reg))
+				self:emit_sib(reg2.scale, index_reg and index_reg.i, base_reg and base_reg.i)
 			else
-				self:emit(encode_modrm(mod, reg1, reg2))
+				self:emit_modrm(mod, reg1.i, reg2.i)
 			end
 
 			if mod == MOD_DISP8 then
@@ -676,369 +687,166 @@ return function(Assembler)
 		function Assembler:ret()
 			self:emit(0xC3)
 		end
-	end
 
-	do -- debug
-		require("moondust.breakpoint")(Assembler)
-	end
+		function Assembler:push(reg)
+			if reg.is_extended then self:rex(false, reg.is_extended, false, false) end
 
-	do
-		function Assembler:movsd(dest_reg, src_op)
-			if src_op.indirect then
-				assert(dest_reg.class == "simd", "movsd load requires SSE2 register as destination")
-
-				if dest_reg.is_extended then
-					self:rex(false, false, dest_reg.is_extended, false)
-				end
-
-				self:emit(0xF2, 0x0F, 0x10)
-				self:emit_modrm_sib(dest_reg, src_op)
-				return
-			end
-
-			if dest_reg.indirect then
-				assert(src_op.class == "simd", "movsd store requires SSE2 register as source")
-
-				if src_op.is_extended then
-					self:rex(false, false, src_op.is_extended, false)
-				end
-
-				self:emit(0xF2, 0x0F, 0x11)
-				self:emit_modrm_sib(src_op, dest_reg)
-				return
-			end
-
-			assert(
-				dest_reg.class == "simd" and src_op.class == "simd",
-				"movsd reg-reg requires SSE2 registers"
-			)
-
-			if dest_reg.is_extended or src_op.is_extended then
-				self:rex(false, false, dest_reg.is_extended, false)
-			end
-
-			self:emit(0xF2, 0x0F, 0x10)
-			self:emit_modrm_sib(dest_reg, src_op)
+			self:emit(0x50 + reg.i)
 		end
 
-		function Assembler:vmovaps(dst, src)
-			assert(dst.class == "simd" and src.class == "simd", "vmovaps requires AVX registers")
-			self:emit(0xC5, 0xFC, 0x28)
-			self:emit_modrm_sib(dst, src)
+		function Assembler:pop(reg)
+			if reg.is_extended then self:rex(false, reg.is_extended, false, false) end
+
+			self:emit(0x58 + reg.i)
 		end
 
-		function Assembler:vmovaps_store(dest_mem, src_reg)
-			self:emit(0xC5, 0xFC, 0x29)
-			self:emit_modrm_sib(src_reg, R({reg = "rax", indirect = true}))
+		function Assembler:syscall()
+			self:emit(0x0F, 0x05)
 		end
 
-		function Assembler:vmovups(dst, src)
-			self:emit(0xC5, 0xFC, 0x10)
-			self:emit_modrm_sib(dst, src)
-		end
-
-		function Assembler:vmovups_load(dest_reg, src_mem)
-			assert(dest_reg.class == "simd", "vmovups requires AVX register as destination")
-			self:emit(0xC5, 0xFC, 0x10)
-			self:emit_modrm_sib(dest_reg, R({reg = "rax", indirect = true}))
-		end
-
-		function Assembler:vmovups_store(dest_mem, src_reg)
-			assert(src_reg.class == "simd", "vmovups requires AVX register as source")
-			self:emit(0xC5, 0xFC, 0x11)
-			self:emit_modrm_sib(src_reg, R({reg = "rax", indirect = true}))
-		end
-
-		function Assembler:movaps(dst, src)
-			assert(dst.class == "simd" and src.class == "simd", "movaps requires SSE registers")
-
-			if dst.is_extended or src.is_extended then
-				self:rex(false, src.is_extended, dst.is_extended, false)
-			end
-
-			self:emit(0x0F, 0x28)
-			self:emit_modrm_sib(dst, src)
-		end
-
-		function Assembler:movaps_load(dest_reg, src_mem)
-			assert(dest_reg.class == "simd", "movaps requires SSE register as destination")
-
-			if dest_reg.is_extended then
-				self:rex(false, false, dest_reg.is_extended, false)
-			end
-
-			self:emit(0x0F, 0x28)
-			self:emit_modrm_sib(dest_reg, R({reg = "rax", indirect = true}))
-		end
-
-		function Assembler:movaps_store(dest_mem, src_reg)
-			assert(src_reg.class == "simd", "movaps requires SSE register as source")
-
-			if src_reg.is_extended then
-				self:rex(false, false, src_reg.is_extended, false)
-			end
-
-			self:emit(0x0F, 0x29)
-			self:emit_modrm_sib(src_reg, R({reg = "rax", indirect = true}))
-		end
-
-		function Assembler:movdqu(reg1, reg2)
-			assert(reg1.class == "simd" and reg2.class == "simd", "movdqu requires SSE registers")
-
-			if reg1.is_extended or reg2.is_extended then
-				self:rex(false, reg1.is_extended, reg2.is_extended, false)
-			end
-
-			self:emit(0xF3, 0x0F, 0x6F)
-			self:emit_modrm_sib(reg2, reg1)
-		end
-	end
-
-	function Assembler:mulsd(dest_reg, src_reg)
-		assert(dest_reg.class == "simd" and src_reg.class == "simd", "mulsd requires SSE2 registers")
-
-		if dest_reg.is_extended or src_reg.is_extended then
-			self:rex(false, false, dest_reg.is_extended, false)
-		end
-
-		self:emit(0xF2, 0x0F, 0x59) -- F2 0F 59 /r - MULSD xmm1, xmm2/m64
-		self:emit_modrm_sib(dest_reg, src_reg)
-	end
-
-	function Assembler:addsd(dest_reg, src_reg)
-		assert(dest_reg.class == "simd" and src_reg.class == "simd", "addsd requires SSE2 registers")
-
-		if dest_reg.is_extended or src_reg.is_extended then
-			self:rex(false, false, dest_reg.is_extended, false)
-		end
-
-		self:emit(0xF2, 0x0F, 0x58) -- F2 0F 58 /r - ADDSD xmm1, xmm2/m64
-		self:emit_modrm_sib(dest_reg, src_reg)
-	end
-
-	function Assembler:sqrtsd(dest_reg, src_reg)
-		assert(dest_reg.class == "simd" and src_reg.class == "simd", "sqrtsd requires SSE2 registers")
-
-		if dest_reg.is_extended or src_reg.is_extended then
-			self:rex(false, false, dest_reg.is_extended, false)
-		end
-
-		self:emit(0xF2, 0x0F, 0x51) -- F2 0F 51 /r - SQRTSD xmm1, xmm2/m64
-		self:emit_modrm_sib(dest_reg, src_reg)
-	end
-
-	function Assembler:push(reg)
-		if reg.is_extended then self:rex(false, reg.is_extended, false, false) end
-
-		self:emit(0x50 + reg.i)
-	end
-
-	function Assembler:pop(reg)
-		if reg.is_extended then self:rex(false, reg.is_extended, false, false) end
-
-		self:emit(0x58 + reg.i)
-	end
-
-	function Assembler:syscall()
-		self:emit(0x0F, 0x05)
-	end
-
-	do
-		function Assembler:addps(reg1, reg2)
-			assert(reg1.class == "simd" and reg2.class == "simd", "addps requires SSE registers")
-
-			if reg1.is_extended or reg2.is_extended then
-				self:rex(false, reg1.is_extended, reg2.is_extended, false)
-			end
-
-			self:emit(0x0F, 0x58)
-			self:emit_modrm_sib(reg2, reg1)
-		end
-
-		function Assembler:mulps(reg1, reg2)
-			assert(reg1.class == "simd" and reg2.class == "simd", "mulps requires SSE registers")
-
-			if reg1.is_extended or reg2.is_extended then
-				self:rex(false, reg1.is_extended, reg2.is_extended, false)
-			end
-
-			self:emit(0x0F, 0x59)
-			self:emit_modrm_sib(reg2, reg1)
-		end
-	end
-
-	do
-		local function create_avx_instruction(name, opcode)
-			Assembler[name] = function(self, dst, src1, src2)
-				assert(
-					dst.class == "simd" and src1.class == "simd" and src2.class == "simd",
-					name .. " requires AVX registers"
-				)
-				self:emit(0xC5, 0xF8, opcode)
-				self:emit_modrm_sib(dst, src2)
-			end
-		end
-
-		-- Define instructions using the template
-		create_avx_instruction("vxorps", 0x57)
-		create_avx_instruction("vmulps", 0x59)
-		create_avx_instruction("vaddps", 0x58)
-		create_avx_instruction("vsubps", 0x5C)
-		create_avx_instruction("vdivps", 0x5E)
-	end
-
-	do
-		local function handle_immediate_operation(self, reg, imm, base_opcode, extension)
-			self:rex(true, reg.is_extended, false, false)
-
+		local function handle_immediate_operation(self, reg, imm, extension)
 			if imm >= -128 and imm <= 127 then
-				self:emit(0x83)
-				self:emit_opext(extension, reg)
+				self:emit(self:emit(0x83))
+				self:emit_modrm(MOD_REG, extension, reg.i)
 				self:emit_i8(imm)
 			else
 				self:emit(0x81)
-				self:emit_opext(extension, reg)
+				self:emit_modrm(MOD_REG, extension, reg.i)
 				self:emit_i32(imm)
 			end
 		end
 
-		local function handle_register_operation(self, reg1, reg2, opcode)
-			self:rex(true, reg1.is_extended, reg2.is_extended, false)
-			self:emit(opcode)
-			self:emit_modrm_sib(reg1, reg2)
+		do
+			function Assembler:inc(reg)
+				self:rex_reg(reg)
+				self:emit(0xFF)
+				self:emit_modrm(MOD_REG, 0, reg.i)
+			end
+
+			function Assembler:dec(reg)
+				self:rex_reg(reg)
+				self:emit(0xFF)
+				self:emit_modrm(MOD_REG, 1, reg.i)
+			end
+
+			function Assembler:add(reg1, op2)
+				if type(op2) == "number" then
+					self:rex_reg(reg1)
+					handle_immediate_operation(self, reg1, op2, 0)
+				else
+					local reg2 = op2
+					self:rex_reg(reg1, reg2)
+					self:emit(0x03)
+					self:emit_modrm_sib(reg1, reg2)
+				end
+			end
+
+			function Assembler:sub(reg1, op2)
+				if type(op2) == "number" then
+					self:rex_reg(reg1)
+					handle_immediate_operation(self, reg1, op2, 5)
+				else
+					local reg2 = op2
+					self:rex_reg(reg1, reg2)
+					self:emit(0x2B)
+					self:emit_modrm_sib(reg1, reg2)
+				end
+			end
 		end
 
-		local function emit_opext(self, extension, rm, mod)
-			local modrm = bit.bor(
-				bit.lshift(bit.band(mod or 3, 0x3), 6),
-				bit.lshift(bit.band(extension, 0x7), 3),
-				bit.band(rm.i, 0x7)
-			)
-			self:emit(modrm)
-		end
-
-		function Assembler:xor(reg1, reg2)
-			self:rex_reg(reg1, reg2)
-			self:rex(true, reg1.is_extended, reg2.is_extended, false)
-			self:emit(0x33)
-			self:emit_modrm_sib(reg1, reg2)
-		end
-
-		function Assembler:inc(reg)
-			assert(reg.bits == 64, "only supports 64-bit registers")
-			self:rex(true, reg.is_extended, false, false)
-			self:emit(0xFF)
-			emit_opext(self, 0, reg)
-		end
-
-		function Assembler:dec(reg)
-			assert(reg.bits == 64, "only supports 64-bit registers")
-			self:rex(true, reg.is_extended, false, false)
-			self:emit(0xFF)
-			emit_opext(self, 1, reg)
+		function Assembler:mul(reg)
+			self:rex_reg(reg)
+			self:emit(0xF7)
+			self:emit_modrm(MOD_REG, 4, reg.i)
 		end
 
 		function Assembler:cmp(reg1, op2)
 			assert(reg1.bits == 64, "only supports 64-bit registers")
 
 			if type(op2) == "number" then
-				self:rex(true, reg1.is_extended, false, false)
-
-				if op2 >= -128 and op2 <= 127 then
-					self:emit(0x83)
-					emit_opext(self, 7, reg1)
-					self:emit_i8(op2)
-				else
-					self:emit(0x81)
-					emit_opext(self, 7, reg1)
-					self:emit_i32(op2)
-				end
+				self:rex_reg(reg1)
+				handle_immediate_operation(self, reg1, op2, 7)
 			else
 				local reg2 = op2
-				self:rex(true, reg1.is_extended, reg2.is_extended, false)
+				self:rex_reg(reg1, reg2)
 				self:emit(0x3B)
 				self:emit_modrm_sib(reg1, reg2)
 			end
 		end
 
-		function Assembler:add(reg1, op2)
-			assert(reg1.bits == 64)
-
-			if type(op2) == "number" then
-				self:rex(true, reg1.is_extended, false, false)
-
-				if op2 >= -128 and op2 <= 127 then
-					self:emit(0x83)
-					emit_opext(self, 0, reg1)
-					self:emit_i8(op2)
-				else
-					self:emit(0x81)
-					emit_opext(self, 0, reg1)
-					self:emit_i32(op2)
-				end
-			else
-				local reg2 = op2
-				self:rex(true, reg1.is_extended, reg2.is_extended, false)
-				self:emit(0x03)
-				self:emit_modrm_sib(reg1, reg2)
-			end
-		end
-
-		function Assembler:mul(reg)
-			assert(reg.bits == 64)
-			self:rex(true, reg.is_extended, false, false)
-			self:emit(0xF7)
-			emit_opext(self, 4, reg)
-		end
-
-		function Assembler:shl(reg1, op2)
-			assert(reg1.bits == 64)
-
-			if type(op2) == "number" then
-				self:rex(true, reg1.is_extended, false, false)
-
-				if op2 == 1 then
-					self:emit(0xD1)
-					emit_opext(self, 4, reg1)
-				else
-					self:emit(0xC1)
-					emit_opext(self, 4, reg1)
-					self:emit_i8(op2)
-				end
-			else
-				local reg2 = op2
-
-				if reg2.reg ~= "rcx" and reg2.reg ~= "cl" then
-					error("shift count must be in CL register")
+		do
+			do -- xor
+				local function reg_to_reg(self, dst, src)
+					self:rex_reg(dst, src)
+					self:emit(0x33) -- XOR r64, r/m64
+					self:emit_modrm_sib(dst, src)
 				end
 
-				self:rex(true, reg1.is_extended, false, false)
-				self:emit(0xD3)
-				emit_opext(self, 4, reg1)
-			end
-		end
-
-		function Assembler:sub(reg1, op2)
-			assert(reg1.bits == 64)
-
-			if type(op2) == "number" then
-				self:rex(true, reg1.is_extended, false, false)
-
-				if op2 >= -128 and op2 <= 127 then
-					self:emit(0x83)
-					emit_opext(self, 5, reg1)
-					self:emit_i8(op2)
-				else
-					self:emit(0x81)
-					emit_opext(self, 5, reg1)
-					self:emit_i32(op2)
+				local function mem_to_reg(self, dst, src)
+					self:rex_reg(dst, src)
+					self:emit(0x33) -- XOR r64, r/m64
+					self:emit_modrm_sib(dst, src)
 				end
-			else
-				local reg2 = op2
-				self:rex(true, reg1.is_extended, reg2.is_extended, false)
-				self:emit(0x2B)
-				self:emit_modrm_sib(reg1, reg2)
+
+				local function reg_to_mem(self, dst, src)
+					self:rex_reg(src, dst)
+					self:emit(0x31) -- XOR r/m64, r64
+					self:emit_modrm_sib(src, dst)
+				end
+
+				local function imm_to_reg(self, dst, imm)
+					self:rex_reg(dst)
+					handle_immediate_operation(self, dst, imm, 6) -- 6 is XOR in ModR/M
+				end
+
+				local function imm_to_mem(self, dst, imm)
+					self:rex_reg(dst)
+
+					if imm >= -128 and imm <= 127 then
+						self:emit(0x83) -- XOR r/m64, imm8
+						self:emit(0x34) -- ModR/M byte: 00 110 100
+						self:emit(0x25) -- SIB byte: 00 100 101 for absolute addressing
+						self:emit_i32(dst.disp) -- The absolute address
+						self:emit_i8(imm)
+					else
+						self:emit(0x81) -- XOR r/m64, imm32
+						self:emit(0x34) -- ModR/M byte: 00 110 100
+						self:emit(0x25) -- SIB byte: 00 100 101 for absolute addressing
+						self:emit_i32(dst.disp) -- The absolute address
+						self:emit_i32(imm)
+					end
+				end
+
+				function Assembler:xor(dst, src)
+					if tonumber(src) then
+						-- Immediate operand
+						if dst:is_indirect() then
+							imm_to_mem(self, dst, src)
+						else
+							imm_to_reg(self, dst, src)
+						end
+					elseif src:is_indirect() then
+						-- Memory source
+						if dst:is_indirect() then
+							error("Cannot XOR between two memory locations")
+						end
+
+						mem_to_reg(self, dst, src)
+					elseif dst:is_indirect() then
+						-- Memory destination
+						reg_to_mem(self, dst, src)
+					else
+						-- Register to register
+						reg_to_reg(self, dst, src)
+					end
+				end
 			end
 		end
 	end
+
+	do -- debug
+		require("moondust.breakpoint")(Assembler)
+	end
+
+	require("moondust.wip_x64")(Assembler)
 end

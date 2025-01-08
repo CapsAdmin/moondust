@@ -1,5 +1,17 @@
 local ffi = require("ffi")
 local memory = {}
+ffi.cdef[[
+void *malloc(size_t);
+void free(void *);
+]]
+
+function memory.malloc(ctype, size)
+	return ffi.cast(ctype, ffi.C.malloc(size))
+end
+
+function memory.free(ptr)
+	ffi.C.free(ptr)
+end
 
 function memory.object_to_address(var)
 	if type(var) == "cdata" or type(var) == "string" then

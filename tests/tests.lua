@@ -3,6 +3,12 @@ local R = Assembler.Registers
 local memory = require("moondust.memory")
 local ffi = require("ffi")
 
+local function u64(n)
+	local mem = memory.malloc("uint64_t*", ffi.sizeof("uint64_t"))
+	mem[0] = n
+	return mem
+end
+
 local function expect_error(fn, error_msg)
 	local ok, err = pcall(fn)
 
@@ -286,7 +292,7 @@ end)
 
 test("mov reg to pointer", function()
 	for _, val in ipairs(test_values) do
-		local mem = ffi.new("uint64_t[1]")
+		local mem = u64(0)
 		local asm = Assembler()
 		asm:mov(R.rax, val)
 		asm:mov(R(memory.object_to_address(mem)), R.rax)
@@ -301,7 +307,7 @@ end)
 
 test("mov pointer to reg", function()
 	for _, val in ipairs(test_values) do
-		local mem = ffi.new("uint64_t[1]")
+		local mem = u64(0)
 		mem[0] = val
 		local asm = Assembler()
 		asm:mov(R.rax, R(memory.object_to_address(mem)))
@@ -316,7 +322,7 @@ end)
 
 test("mov reg pointer roundtrip", function()
 	for _, val in ipairs(test_values) do
-		local mem = ffi.new("uint64_t[1]", val)
+		local mem = u64(val)
 		local asm = Assembler()
 		asm:mov(R.rax, R(memory.object_to_address(mem)))
 		asm:mov(R(memory.object_to_address(mem)), R.rax)
@@ -332,7 +338,7 @@ test("mov reg pointer roundtrip", function()
 	end
 
 	for _, val in ipairs(test_values) do
-		local mem = ffi.new("uint64_t[1]", val)
+		local mem = u64(val)
 		local asm = Assembler()
 		asm:mov(R.r9, R(memory.object_to_address(mem)))
 		asm:mov(R.rax, R.r9)
@@ -344,105 +350,6 @@ test("mov reg pointer roundtrip", function()
 			print(asm:debug_hex())
 			error(string.format("Memory round trip failed - Expected 0x%x, got 0x%x", val, result))
 		end
-	end
-end)
-
-test("avx unaligned store", function(asm)
-	local source = ffi.new("float[8]")
-	local result = ffi.new("float[8]")
-
-	for i = 0, 7 do
-		source[i] = i + 1.0
-		result[i] = 0.0
-	end
-
-	asm:push(R.rax)
-	asm:mov(R.rax, memory.object_to_address(source))
-	asm:vmovups_load(R.ymm0, R.rax)
-	asm:mov(R.rax, memory.object_to_address(result))
-	asm:vmovups_store(R.rax, R.ymm0)
-	asm:pop(R.rax)
-	asm:ret()
-	asm:build("void (*)(void)")()
-
-	for i = 0, 7 do
-		local expected = source[i]
-		local got = result[i]
-		assert(
-			math.abs(got - expected) < 0.0001,
-			string.format(
-				"AVX unaligned store test failed at index %d: expected %f, got %f",
-				i,
-				expected,
-				got
-			)
-		)
-	end
-end)
-
-test("avx aligned store", function(asm)
-	local AlignedAVXArray = ffi.typeof[[struct { 
-		float data[8] __attribute__((aligned(32))); 
-	}]]
-	local source = AlignedAVXArray()
-	local result = AlignedAVXArray()
-
-	for i = 0, 7 do
-		source.data[i] = i + 1.0
-		result.data[i] = 0.0
-	end
-
-	asm:push(R.rax)
-	asm:mov(R.rax, memory.object_to_address(source.data))
-	asm:vmovups_load(R.ymm0, R.rax)
-	asm:mov(R.rax, memory.object_to_address(result.data))
-	asm:vmovaps_store(R.rax, R.ymm0)
-	asm:pop(R.rax)
-	asm:ret()
-	asm:build("void (*)(void)")()
-
-	for i = 0, 7 do
-		local expected = source.data[i]
-		local got = result.data[i]
-		assert(
-			math.abs(got - expected) < 0.0001,
-			string.format("AVX store test failed at index %d: expected %f, got %f", i, expected, got)
-		)
-	end
-end)
-
-test("sse store", function(asm)
-	ffi.cdef[[
-			typedef struct { float data[4] __attribute__((aligned(16))); } AlignedFloatArray;
-		]]
-	local source = ffi.new("AlignedFloatArray")
-	local result = ffi.new("AlignedFloatArray")
-	source.data[0] = 1.0
-	source.data[1] = 2.0
-	source.data[2] = 3.0
-	source.data[3] = 4.0
-
-	for i = 0, 3 do
-		result.data[i] = 0.0
-	end
-
-	asm:push(R.rax)
-	asm:mov(R.rax, memory.object_to_address(source.data))
-	asm:movaps_load(R.xmm0, R.rax)
-	asm:movaps(R.xmm1, R.xmm0)
-	asm:mov(R.rax, memory.object_to_address(result.data))
-	asm:movaps_store(R.rax, R.xmm1)
-	asm:pop(R.rax)
-	asm:ret()
-	asm:build("void (*)(void)")()
-
-	for i = 0, 3 do
-		local expected = source.data[i]
-		local got = result.data[i]
-		assert(
-			math.abs(got - expected) < 0.0001,
-			string.format("SSE test failed at index %d: expected %f, got %f", i, expected, got)
-		)
 	end
 end)
 
@@ -489,7 +396,7 @@ test("additional mov scenarios", function(asm)
 		-240,
 	}
 	local buffer_size = 64
-	local mem = ffi.new("uint64_t[?]", buffer_size)
+	local mem = u64(buffer_size)
 	local middle_offset = (buffer_size / 2) * 8
 	local test_val = 0x1234567890ABCDEFULL
 
@@ -661,4 +568,122 @@ test("debug interrupt", function(asm)
 
 	asm:ret()
 	asm:build("uint64_t (*)(void)")()
+end)
+
+test("basic operations", function(asm)
+	asm:mov(R.rax, 0)
+	asm:inc(R.rax)
+
+	asm:debug(function(state)
+		assert(state.rax == 1)
+	end)
+
+	asm:dec(R.rax)
+
+	asm:debug(function(state)
+		assert(state.rax == 0)
+	end)
+
+	asm:add(R.rax, 1)
+
+	asm:debug(function(state)
+		assert(state.rax == 1)
+	end)
+
+	asm:sub(R.rax, 1)
+
+	asm:debug(function(state)
+		assert(state.rax == 0)
+	end)
+
+	asm:add(R.rax, 2)
+	asm:mul(R.rax, 2)
+
+	asm:debug(function(state)
+		assert(state.rax == 4)
+	end)
+
+	asm:xor(R.rax, R.rax)
+
+	asm:debug(function(state)
+		assert(state.rax == 0)
+	end)
+
+	asm:add(R.rax, 2)
+	asm:xor(R.rax, 2)
+
+	asm:debug(function(state)
+		assert(state.rax == 0)
+	end)
+
+	asm:ret()
+	asm:build("void (*)(void)")()
+end)
+
+test("xor operations", function(asm)
+	asm:push(R.rax)
+	asm:push(R.rbx)
+	asm:push(R.rcx)
+	asm:push(R.rdx)
+	-- Test register to register XOR
+	asm:mov(R.rax, 0xFFFFFFFFFFFFFFFF) -- all bits set
+	asm:xor(R.rax, R.rax) -- XOR with self = clear
+	asm:debug(function(state)
+		assert(state.rax == 0, "reg,reg XOR failed")
+	end)
+
+	-- Test immediate to register XOR
+	asm:mov(R.rax, 5) -- 0101
+	asm:xor(R.rax, 3) -- 0011
+	asm:debug(function(state)
+		assert(state.rax == 6, "reg,imm XOR failed")
+	end)
+
+	-- Test memory to register XOR
+	local mem1 = u64(12)
+	asm:mov(R.rcx, 5)
+	asm:xor(R.rcx, R(memory.object_to_address(mem1)))
+
+	asm:debug(function(state)
+		assert(state.rcx == 9, "mem,reg XOR failed") -- 5 XOR 12 = 9
+	end)
+
+	-- Test register to memory XOR
+	local mem2 = u64(15)
+	asm:mov(R.rbx, 8)
+	asm:xor(R(memory.object_to_address(mem2)), R.rbx)
+
+	asm:debug(function(state)
+		assert(mem2[0] == 7, "reg,mem XOR failed") -- 15 XOR 8 = 7
+	end)
+
+	-- Test memory with immediate XOR
+	local mem3 = u64(255)
+	asm:xor(R(memory.object_to_address(mem3)), 170)
+
+	asm:debug(function(state)
+		assert(mem3[0] == 85, "mem,imm XOR failed") -- 255 XOR 170 = 85
+	end)
+
+	-- Test larger immediate values
+	asm:mov(R.rax, 0x12345678)
+	asm:xor(R.rax, 0x11111111)
+
+	asm:debug(function(state)
+		assert(state.rax == 0x03254769, "large immediate XOR failed")
+	end)
+
+	-- Test classic XOR trick for zeroing register
+	asm:mov(R.rax, -1) -- fill with 1s
+	asm:xor(R.rax, R.rax) -- should zero the register
+	asm:debug(function(state)
+		assert(state.rax == 0, "XOR zero trick failed")
+	end)
+
+	asm:pop(R.rdx)
+	asm:pop(R.rcx)
+	asm:pop(R.rbx)
+	asm:pop(R.rax)
+	asm:ret()
+	asm:build("void (*)(void)")()
 end)
