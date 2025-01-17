@@ -1,10 +1,4 @@
 -- moondust x64 assembler
-local MOD_NO_DISP = 0
-local MOD_DISP8 = 1
-local MOD_DISP32 = 2
-local MOD_REG = 3
-local SIB_INDICATOR = 4
-local NO_INDEX = 4
 local NO_BASE = 5
 local RIP_RELATIVE = 5
 local scale_bits = {[1] = 0x00, [2] = 0x40, [4] = 0x80, [8] = 0xC0}
@@ -116,67 +110,6 @@ return function(Assembler)
 					error("Mask registers cannot be used with index or scale", 2)
 				end
 			end
-		end
-
-		local function REG(val)
-			if tonumber(val) then
-				return {disp = val, indirect = true}
-			elseif type(val) == "string" then
-				validate_register_name(val)
-				local new = {reg = val}
-
-				for k, v in pairs(reginfo[val]) do
-					new[k] = v
-				end
-
-				validate_combinations(new)
-				assert(type(new.i) == "number", "Register index must be a number")
-				return new
-			elseif type(val) == "table" then
-				local new = {}
-
-				if val.indirect and val.disp and not (val.reg or val.base or val.index) then
-					validate_displacement(val.disp)
-					new.i = 0
-
-					for k, v in pairs(val) do
-						new[k] = v
-					end
-
-					return new
-				end
-
-				for _, key in ipairs({"reg", "index", "base"}) do
-					if val[key] then
-						validate_register_name(val[key])
-						new[key] = val[key]
-
-						for k, v in pairs(reginfo[val[key]]) do
-							if not new[k] then new[k] = v end
-						end
-					end
-				end
-
-				validate_scale(val.scale)
-				validate_displacement(val.disp)
-
-				for k, v in pairs(val) do
-					if k ~= "reg" and k ~= "index" and k ~= "base" then new[k] = v end
-				end
-
-				validate_combinations(new)
-
-				for _, key in ipairs({"reg", "index", "base"}) do
-					if new[key] then
-						assert(type(new.i) == "number", "Register index must be a number")
-						return new
-					end
-				end
-
-				error("Table must contain at least one valid register reference", 2)
-			end
-
-			error("Invalid register specification: " .. tostring(val), 2)
 		end
 
 		local Register = {}
@@ -312,7 +245,64 @@ return function(Assembler)
 		end
 
 		function Register.new(val)
-			return setmetatable(REG(val), Register)
+			if tonumber(val) then
+				return setmetatable({disp = val, indirect = true}, Register)
+			elseif type(val) == "string" then
+				validate_register_name(val)
+				local new = {reg = val}
+
+				for k, v in pairs(reginfo[val]) do
+					new[k] = v
+				end
+
+				validate_combinations(new)
+				assert(type(new.i) == "number", "Register index must be a number")
+				return setmetatable(new, Register)
+			elseif type(val) == "table" then
+				local new = {}
+
+				if val.indirect and val.disp and not (val.reg or val.base or val.index) then
+					validate_displacement(val.disp)
+					new.i = 0
+
+					for k, v in pairs(val) do
+						new[k] = v
+					end
+
+					return setmetatable(new, Register)
+				end
+
+				for _, key in ipairs({"reg", "index", "base"}) do
+					if val[key] then
+						validate_register_name(val[key])
+						new[key] = val[key]
+
+						for k, v in pairs(reginfo[val[key]]) do
+							if not new[k] then new[k] = v end
+						end
+					end
+				end
+
+				validate_scale(val.scale)
+				validate_displacement(val.disp)
+
+				for k, v in pairs(val) do
+					if k ~= "reg" and k ~= "index" and k ~= "base" then new[k] = v end
+				end
+
+				validate_combinations(new)
+
+				for _, key in ipairs({"reg", "index", "base"}) do
+					if new[key] then
+						assert(type(new.i) == "number", "Register index must be a number")
+						return setmetatable(new, Register)
+					end
+				end
+
+				error("Table must contain at least one valid register reference", 2)
+			end
+
+			error("Invalid register specification: " .. tostring(val), 2)
 		end
 
 		Assembler.Register = Register
@@ -444,7 +434,7 @@ return function(Assembler)
 				self:modrm_reg(reg1.i)
 				self:modrm_use_sib()
 				self:sib_scale(1)
-				self:sib_base(5) -- 5 = no base
+				self:sib_base(NO_BASE) -- 5 = no base
 				self:displace(reg2.disp)
 				return self
 			elseif reg1.indirect and reg1.disp and not reg1.reg and not reg1.base and not reg1.index then
@@ -452,7 +442,7 @@ return function(Assembler)
 				self:modrm_reg(reg2.i)
 				self:modrm_use_sib()
 				self:sib_scale(1)
-				self:sib_base(5)
+				self:sib_base(NO_BASE)
 				self:displace(reg1.disp)
 				return self
 			end
@@ -907,109 +897,59 @@ return function(Assembler)
 	end
 
 	do -- jump labels
-		function Assembler:get_reference_label(name, type, size)
-			if not self.labels[name] then
-				self.labels[name] = {references = {}, defined = false}
-			end
-
-			table.insert(self.labels[name].references, {pos = self.pos, type = type, size = size})
-			return self.pos
-		end
-
-		-- je function
-		function Assembler:je(label)
-			self:opcode(0x0F, 0x84)
-			local ref_pos = self:get_reference_label(label, "near", 4)
-			self:emit(0, 0, 0, 0)
-		end
-
-		function Assembler:jne(label)
-			self:opcode(0x0F, 0x85)
-			local ref_pos = self:get_reference_label(label, "near", 4)
-			self:emit(0, 0, 0, 0)
-		end
-
-		function Assembler:jl(label)
-			self:opcode(0x0F, 0x8C)
-			local ref_pos = self:get_reference_label(label, "near", 4)
-			self:emit(0, 0, 0, 0)
-		end
-
-		function Assembler:jle(label)
-			self:opcode(0x0F, 0x8E)
-			local ref_pos = self:get_reference_label(label, "near", 4)
-			self:emit(0, 0, 0, 0)
-		end
-
-		function Assembler:jg(label)
-			local jump_pos = self.pos
-			self:opcode(0x0F, 0x8F)
-
-			if not self.labels[label] then
-				self.labels[label] = {references = {}, defined = false}
-			end
-
-			table.insert(
-				self.labels[label].references,
-				{
-					pos = jump_pos,
-					type = "long_conditional",
-					size = 6,
-				}
-			)
-			self:emit(0, 0, 0, 0)
-		end
-
-		function Assembler:jge(label)
-			local jump_pos = self.pos
-			self:opcode(0x0F, 0x8D)
-			local ref_pos = self:get_reference_label(label, "near", 4)
-			self:emit(0, 0, 0, 0)
-		end
-
-		function Assembler:jne(label)
-			local jump_pos = self.pos
-
-			if self.labels[label] and self.labels[label].defined then
-				local target_pos = self.labels[label].pos
-				local rel32 = target_pos - (jump_pos + 6)
-				self:opcode(0x0F, 0x85)
+		-- Common jump function template to avoid code duplication
+		local function jump_function(...)
+			local opcodes = {...}
+			return function(self, label)
 				local jump_pos = self.pos
-				self:emit_i32(rel32)
-			else
-				if not self.labels[label] then
-					self.labels[label] = {defined = false, references = {}}
+
+				if self.labels[label] and self.labels[label].defined then
+					-- Label already defined, calculate relative offset for backward jump
+					local target_pos = self.labels[label].pos
+					local rel32 = target_pos - (jump_pos + 4 + #opcodes) -- 6 bytes: 2 for opcode, 4 for offset
+					self:opcode(unpack(opcodes))
+					self:emit_i32(rel32)
+				else
+					-- Forward jump to undefined label
+					if not self.labels[label] then
+						self.labels[label] = {references = {}, defined = false}
+					end
+
+					table.insert(
+						self.labels[label].references,
+						{
+							pos = jump_pos,
+							type = #opcodes == 1 and "near" or "long_conditional",
+							size = 4 + #opcodes, -- 2 bytes opcode + 4 bytes offset
+						}
+					)
+					self:opcode(unpack(opcodes))
+					self:emit(0, 0, 0, 0) -- Placeholder for the 32-bit offset
 				end
-
-				table.insert(
-					self.labels[label].references,
-					{
-						pos = jump_pos,
-						type = "jne",
-						size = 6,
-					}
-				)
-				self:opcode(0x0F, 0x85)
-				self:emit(0, 0, 0, 0)
 			end
 		end
 
-		function Assembler:jmp(label)
-			local jump_pos = self.pos
-			self:opcode(0xE9)
+		Assembler.je = jump_function(0x0F, 0x84)
+		Assembler.jne = jump_function(0x0F, 0x85)
+		Assembler.jl = jump_function(0x0F, 0x8C)
+		Assembler.jle = jump_function(0x0F, 0x8E)
+		Assembler.jg = jump_function(0x0F, 0x8F)
+		Assembler.jge = jump_function(0x0F, 0x8D)
+		Assembler.jmp = jump_function(0xE9)
+		local map = {
+			["=="] = Assembler.je,
+			["~="] = Assembler.jne,
+			["<"] = Assembler.jl,
+			["<="] = Assembler.jle,
+			[">"] = Assembler.jg,
+			[">="] = Assembler.jge,
+		}
 
-			if not self.labels[label] then
-				self.labels[label] = {references = {}, defined = false}
-			end
-
-			table.insert(self.labels[label].references, {
-				pos = jump_pos,
-				type = "near",
-				size = 5,
-			})
-			self:emit(0, 0, 0, 0)
+		function Assembler:jump(label, cond)
+			if not cond then self:jmp(label) else map[cond](self, label) end
 		end
 
+		-- Label definition remains the same
 		function Assembler:label(name)
 			if self.labels[name] and self.labels[name].defined then
 				error(string.format("Label '%s' already defined", name))
@@ -1262,7 +1202,7 @@ return function(Assembler)
 					ins:modrm_use_sib() -- Use SIB byte (rm = 4)
 					-- Set up SIB byte
 					ins:sib_scale(1)
-					ins:sib_base(5) -- No base register, use displacement only
+					ins:sib_base(NO_BASE) -- No base register, use displacement only
 					-- Add displacement
 					ins:displace(dst.disp)
 					-- Emit the instruction
