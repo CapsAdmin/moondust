@@ -73,6 +73,279 @@ local function test(test_name, test_function)
 	end
 end
 
+test("raw instructions", function()
+	-- Test helper to compare byte arrays
+	local function compare_bytes(expected, actual)
+		assert(
+			#expected == #actual,
+			string.format("Expected %d bytes but got %d", #expected, #actual)
+		)
+
+		for i = 1, #expected do
+			assert(
+				expected[i] == string.byte(actual[i]),
+				string.format(
+					"Byte mismatch at position %d: expected 0x%02x, got 0x%02x",
+					i,
+					expected[i],
+					string.byte(actual[i])
+				)
+			)
+		end
+	end
+
+	local function cmp(tbl, ...)
+		local asm = Assembler()
+		asm:emit_instruction(tbl)
+		compare_bytes({...}, asm.code)
+	end
+
+	-- Basic instruction tests
+	cmp({opcode = {0x90}}, 0x90) -- NOP
+	-- ModR/M direct register-to-register tests
+	cmp(
+		{
+			opcode = {0x89}, -- MOV r/m64, r64
+			modrm = {
+				mode = "direct",
+				reg = 0, -- EAX
+				rm = 1, -- ECX
+			},
+		},
+		0x89,
+		0xC1
+	)
+	-- ModR/M with 8-bit displacement
+	cmp(
+		{
+			opcode = {0x89}, -- MOV m64, r64
+			modrm = {
+				mode = "indirect8",
+				reg = 0, -- EAX
+				rm = 1, -- [RCX + disp8]
+			},
+			disp = 0x42,
+		},
+		0x89,
+		0x41,
+		0x42
+	)
+	-- ModR/M with 32-bit displacement
+	cmp(
+		{
+			opcode = {0x89}, -- MOV m64, r64
+			modrm = {
+				mode = "indirect32",
+				reg = 0,
+				rm = 1,
+			},
+			disp = 0x12345678,
+		},
+		0x89,
+		0x81,
+		0x78,
+		0x56,
+		0x34,
+		0x12
+	)
+	-- SIB testing
+	cmp(
+		{
+			opcode = {0x89}, -- MOV m64, r64
+			modrm = {
+				mode = "indirect",
+				reg = 0,
+				rm = 4, -- Indicates SIB follows
+			},
+			sib = {
+				scale = 4,
+				index = 2, -- RDX
+				base = 1, -- RCX
+			},
+		},
+		0x89,
+		0x04,
+		0x91
+	)
+	-- REX prefix tests
+	cmp(
+		{
+			prefix = {"rex_w"}, -- 64-bit operand size
+			opcode = {0x89},
+			modrm = {mode = "direct", reg = 0, rm = 1},
+		},
+		0x48,
+		0x89,
+		0xC1
+	)
+	-- Legacy prefix tests
+	cmp(
+		{
+			prefix = {"lock"}, -- LOCK prefix
+			opcode = {0x89},
+			modrm = {mode = "direct", reg = 0, rm = 1},
+		},
+		0xF0,
+		0x89,
+		0xC1
+	)
+	-- Multiple prefix test
+	cmp(
+		{
+			prefix = {"lock", "rex_w"},
+			opcode = {0x89},
+			modrm = {mode = "direct", reg = 0, rm = 1},
+		},
+		0xF0,
+		0x48,
+		0x89,
+		0xC1
+	)
+	-- Segment override prefix test
+	cmp(
+		{
+			prefix = {"fs_segment_override"},
+			opcode = {0x89},
+			modrm = {mode = "direct", reg = 0, rm = 1},
+		},
+		0x64,
+		0x89,
+		0xC1
+	)
+	-- Complex SIB with displacement
+	cmp(
+		{
+			prefix = {"rex_w"},
+			opcode = {0x89},
+			modrm = {
+				mode = "indirect8",
+				reg = 0,
+				rm = 4,
+			},
+			sib = {
+				scale = 8,
+				index = 3, -- RBX
+				base = 5, -- RBP
+			},
+			disp = 127,
+		},
+		0x48,
+		0x89,
+		0x44,
+		0xDD,
+		127
+	)
+	-- Test displacement bounds
+	-- Maximum 8-bit signed displacement
+	cmp(
+		{
+			opcode = {0x89},
+			modrm = {
+				mode = "indirect8",
+				reg = 0,
+				rm = 1,
+			},
+			disp = 127,
+		},
+		0x89,
+		0x41,
+		127
+	)
+	cmp(
+		{
+			prefix = {
+				"rex_w",
+				"lock",
+				"cs_segment_override",
+				"operand_size_override",
+				"address_size_override",
+			},
+			opcode = {0x81},
+			modrm = {
+				mode = "indirect32",
+				reg = 1,
+				rm = 1,
+			},
+			sib = {
+				scale = 2,
+				index = 0,
+				base = 0,
+			},
+			disp = 0,
+		},
+		0xf0, -- lock
+		0x2E, -- cs_segment_override
+		0x66, -- operand_size_override
+		0x67, -- address_size_override
+		0x48, -- rex_w
+		0x81, -- opcode
+		0x89, -- modrm
+		0x40, -- sib
+		0x00,
+		0x00,
+		0x00,
+		0x00
+	)
+
+	-- Test error cases
+	-- Invalid ModR/M mode
+	local function assert_error(f, err_msg)
+		local success, error = pcall(f)
+		assert(
+			not success and string.find(error, err_msg, 1, true),
+			string.format("Expected error containing '%s', got '%s'", err_msg, error)
+		)
+	end
+
+	assert_error(
+		function()
+			cmp(
+				{
+					opcode = {0x89},
+					modrm = {
+						mode = "invalid_mode",
+						reg = 0,
+						rm = 1,
+					},
+				}
+			)
+		end,
+		"invalid ModR/M mode"
+	)
+
+	-- Invalid displacement range
+	assert_error(
+		function()
+			cmp(
+				{
+					opcode = {0x89},
+					modrm = {
+						mode = "indirect8",
+						reg = 0,
+						rm = 1,
+					},
+					disp = 128, -- Out of range for 8-bit signed
+				}
+			)
+		end,
+		"8-bit number must be between -128 and 127"
+	)
+
+	-- Test prefix conflicts
+	assert_error(
+		function()
+			cmp(
+				{
+					prefix = {"lock", "repne"},
+					opcode = {0x89},
+					modrm = {mode = "direct", reg = 0, rm = 1},
+				}
+			)
+		end,
+		"cannot coexist with"
+	)
+end)
+
 local test_values = {
 	0ULL,
 	42ULL,

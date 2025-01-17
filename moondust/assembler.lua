@@ -136,6 +136,49 @@ do -- constants
 			self:emit(bytes.b[i])
 		end
 	end
+
+	local function check_range(num, min, max, bits)
+		assert(
+			num >= min and num <= max,
+			bits .. "-bit number must be between " .. min .. " and " .. max
+		)
+	end
+
+	function Assembler:emit_number(num, bit_size, signed)
+		if bit_size == 8 then
+			if signed then
+				check_range(num, -128, 127, bit_size)
+				self:emit_i8(num)
+			else
+				check_range(num, 0, 255, bit_size)
+				self:emit_u8(num)
+			end
+		elseif bit_size == 16 then
+			if signed then
+				check_range(num, -32768, 32767, bit_size)
+				self:emit_i16(num)
+			else
+				check_range(num, 0, 65535, bit_size)
+				self:emit_u16(num)
+			end
+		elseif bit_size == 32 then
+			if signed then
+				check_range(num, -2147483648, 2147483647, bit_size)
+				self:emit_i32(num)
+			else
+				check_range(num, 0, 4294967295, bit_size)
+				self:emit_u32(num)
+			end
+		elseif bit_size == 64 then
+			if signed then
+				assert(type(num) == "cdata")
+				self:emit_i64(num)
+			else
+				assert(type(num) == "cdata")
+				self:emit_u64(num)
+			end
+		end
+	end
 end
 
 require("moondust.x86_64")(Assembler)
