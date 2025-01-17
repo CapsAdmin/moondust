@@ -140,7 +140,7 @@ do -- constants
 	local function check_range(num, min, max, bits)
 		assert(
 			num >= min and num <= max,
-			bits .. "-bit number must be between " .. min .. " and " .. max
+			bits .. "-bit number must be between " .. min .. " and " .. max .. " but it is " .. tostring(num)
 		)
 	end
 
