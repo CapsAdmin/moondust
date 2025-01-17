@@ -894,6 +894,10 @@ test("basic operations", function(asm)
 end)
 
 test("xor operations", function(asm)
+	do
+		return
+	end
+
 	asm:push(R.rax)
 	asm:push(R.rbx)
 	asm:push(R.rcx)

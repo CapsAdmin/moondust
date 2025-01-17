@@ -392,6 +392,9 @@ return function(Assembler)
 			return self
 		end
 
+		Instruction.extend_sib_base = Instruction.extend_modrm_rm
+		Instruction.extend_opcode_reg = Instruction.extend_modrm_rm
+
 		function Instruction:modrm_use_sib()
 			self.ctx.modrm = self.ctx.modrm or {}
 			self.ctx.modrm.rm = 4
@@ -415,9 +418,6 @@ return function(Assembler)
 			self.ctx.sib.base = v
 			return self
 		end
-
-		Instruction.extend_sib_base = Instruction.extend_modrm_rm
-		Instruction.extend_opcode_reg = Instruction.extend_modrm_rm
 
 		function Instruction:displace(num)
 			self.ctx.disp = num
@@ -530,12 +530,16 @@ return function(Assembler)
 			return self
 		end
 
-		function Instruction:get()
-			return self.ctx
+		function Instruction:encode()
+			return self.asm:emit_instruction(self.ctx)
 		end
 
-		function Assembler:instruction()
-			return setmetatable({ctx = {}}, Instruction)
+		function Assembler:ins()
+			return setmetatable({ctx = {}, asm = self}, Instruction)
+		end
+
+		function Assembler:opcode(...)
+			self:ins():opcode(...):encode()
 		end
 	end
 
@@ -548,14 +552,14 @@ return function(Assembler)
 			return false
 		end
 
-		local function emit_exclusive_key(self, prefixes, group)
+		local function emit_exclusive_key(out, prefixes, group)
 			local done
 
 			for _, prefix in ipairs(prefixes) do
 				local byte = group[prefix]
 
 				if byte then
-					self:emit(byte)
+					table.insert(out, byte)
 					done = prefix
 
 					break
@@ -617,11 +621,12 @@ return function(Assembler)
 
 		local scale_bits = {[1] = 0b00000000, [2] = 0b01000000, [4] = 0b10000000, [8] = 0b11000000}
 
-		function Assembler:emit_prefix(p)
-			emit_group_prefix(self, legacy_prefixes.group_1, p)
-			emit_group_prefix(self, legacy_prefixes.group_2, p)
-			emit_group_prefix(self, legacy_prefixes.group_3, p)
-			emit_group_prefix(self, legacy_prefixes.group_4, p)
+		local function prefix(p)
+			local out = {}
+			emit_group_prefix(out, legacy_prefixes.group_1, p)
+			emit_group_prefix(out, legacy_prefixes.group_2, p)
+			emit_group_prefix(out, legacy_prefixes.group_3, p)
+			emit_group_prefix(out, legacy_prefixes.group_4, p)
 
 			if
 				has_key(p, "rex_w") or
@@ -635,7 +640,7 @@ return function(Assembler)
 				if has_key(p, "rex_r") then byte = bit.bor(byte, 0b00000100) end -- Extension of ModR/M reg field
 				if has_key(p, "rex_x") then byte = bit.bor(byte, 0b00000010) end -- Extension of SIB index field
 				if has_key(p, "rex_b") then byte = bit.bor(byte, 0b00000001) end -- Extension of ModR/M r/m field, SIB base field, or opcode reg field
-				if byte ~= 0b01000000 then self:emit(byte) end
+				if byte ~= 0b01000000 then table.insert(out, byte) end
 			elseif p.vex_pp and p.vex_l and p.vex_r then
 				error("2-byte VEX prefix not implemented")
 			elseif
@@ -666,61 +671,51 @@ return function(Assembler)
 			then
 				error("EVEX prefix not implemented")
 			end
+
+			return unpack(out)
 		end
 
-		function Assembler:emit_opcode(...)
+		local function opcode(...)
 			local len = select("#", ...)
 			assert(len >= 1 and len <= 3, "opcode must be 1-3 bytes")
-			self:emit(...)
+			return ...
 		end
 
-		function Assembler:emit_modrm(mode, reg, rm)
+		local map = {
+			indirect = 0b00000000,
+			indirect8 = 0b01000000,
+			indirect32 = 0b10000000,
+			direct = 0b11000000,
+		}
+
+		local function modrm(mode, reg, rm)
 			assert(reg >= 0 and reg <= 7, "reg must be between 0 and 7")
 			assert(rm >= 0 and rm <= 7, "rm must be between 0 and 7")
-			-- this ignores 16bit mode
-			local byte = 0b00000000
-
-			do -- mode bits 0b**000000 
-				if mode == "indirect" then
-					byte = 0b00000000
-				elseif mode == "indirect8" then
-					byte = 0b01000000
-				elseif mode == "indirect32" then
-					byte = 0b10000000
-				elseif mode == "direct" then
-					byte = 0b11000000
-				else
-					error(string.format("invalid ModR/M mode: %s", tostring(mode)))
-				end
-			end
-
-			do -- reg bits 0b00***000
-				byte = bit.bor(byte, bit.lshift(reg, 3))
-			end
-
-			do -- R/M bits 0b00000***
-				byte = bit.bor(byte, rm)
-			end
-
-			self:emit(byte)
+			assert(map[mode], "invalid ModR/M mode: ", mode)
+			local byte = map[mode] -- mod bits 0b**000000
+			byte = bit.bor(byte, bit.lshift(reg, 3)) -- reg bits 0b00***000
+			byte = bit.bor(byte, rm) -- R/M bits 0b00000***
+			return byte
 		end
 
-		function Assembler:emit_sib(scale, index, base)
+		local function sib(scale, index, base)
 			assert(scale_bits[scale], "scale must be 1, 2, 4, or 8")
 			assert(index ~= 4, "sib index cannot be 4, however it can be nil")
 			assert(index == nil or index >= 0 and index <= 7, "index register must be between 0 - 7")
 			assert(base >= 0 and base <= 7, "base register must be between 0 - 7")
-			local byte = 0b00000000
-			byte = bit.bor(byte, scale_bits[scale])
-			byte = bit.bor(byte, bit.lshift(index or 4, 3))
-			byte = bit.bor(byte, base)
-			self:emit(byte)
+			local byte = scale_bits[scale] -- scale bits 0b**000000
+			byte = bit.bor(byte, bit.lshift(index or 4, 3)) -- index bits 0b00***000
+			byte = bit.bor(byte, base) -- base bits 0b00000***
+			return byte
 		end
 
-		function Assembler:emit_instruction(info)
-			if info.prefix then self:emit_prefix(info.prefix) end
+		local SIB_INDICATOR = 4
+		local RIP_RELATIVE = 5
 
-			if info.opcode then self:emit_opcode(unpack(info.opcode)) end
+		function Assembler:emit_instruction(info)
+			if info.prefix then self:emit(prefix(info.prefix)) end
+
+			if info.opcode then self:emit(opcode(unpack(info.opcode))) end
 
 			local mode -- Moved mode declaration to outer scope
 			if info.modrm then
@@ -731,34 +726,34 @@ return function(Assembler)
 					if not info.disp then error("32-bit displacement required", 2) end
 				end
 
-				if mode ~= "direct" and info.modrm.rm == 4 then
+				if mode ~= "direct" and info.modrm.rm == SIB_INDICATOR then
 					if not info.sib then error("SIB required", 2) end
 				end
 
-				if mode == "indirect" and info.modrm.rm == 5 then
+				if mode == "indirect" and info.modrm.rm == RIP_RELATIVE then
 					if not info.disp then
 						error("32-bit displacement required for displacement-only addressing", 2)
 					end
 				end
 
-				if mode == "direct" and info.modrm.rm == 5 then
+				if mode == "direct" and info.modrm.rm == RIP_RELATIVE then
 					if not info.disp then
 
-					--error("rip-relative addressing requires displacement", 2)
+					--error("rip-relative addressing requires displacement", 2) -- TODO
 					end
 				end
 
-				if info.sib and info.sib.base == 5 and mode == "indirect" then
+				if info.sib and info.sib.base == RIP_RELATIVE and mode == "indirect" then
 					if not info.disp then
 						error("32-bit displacement required when SIB base is 5 and mod is 0", 2)
 					end
 				end
 
-				self:emit_modrm(info.modrm.mode, info.modrm.reg, info.modrm.rm)
+				self:emit(modrm(info.modrm.mode, info.modrm.reg, info.modrm.rm))
 			end
 
 			if info.sib then
-				self:emit_sib(info.sib.scale, info.sib.index, info.sib.base)
+				self:emit(sib(info.sib.scale, info.sib.index, info.sib.base))
 			end
 
 			if info.disp then
@@ -793,20 +788,12 @@ return function(Assembler)
 		end
 	end
 
-	do -- encoding helpers
-		function Assembler:rex_reg(reg2, reg1, index_reg)
-			self:emit_instruction(self:instruction():rex_reg(reg2, reg1, index_reg):get())
-		end
-
-		function Assembler:emit_modrmsib(reg1, reg2)
-			self:emit_instruction(self:instruction():reg_reg(reg1, reg2):get())
-		end
-	end
-
 	do -- mov
 		local function imm_to_reg(self, dst, imm, signed)
-			self:rex_reg(dst)
-			self:emit(0xB8 + dst.i)
+			local ins = self:ins()
+			ins:rex_reg(dst)
+			ins:opcode(0xB8 + dst.i)
+			ins:encode()
 
 			if dst.bits == 64 then
 				if signed then self:emit_i64(imm) else self:emit_u64(imm) end
@@ -816,36 +803,36 @@ return function(Assembler)
 		end
 
 		local function reg_to_reg(self, dst, src)
-			local ins = self:instruction()
+			local ins = self:ins()
 			ins:rex_reg(dst, src)
 			ins:opcode(0x89)
 			ins:reg_reg(src, dst)
-			self:emit_instruction(ins:get())
+			ins:encode()
 		end
 
 		local function mem_to_reg(self, dst, src)
-			local ins = self:instruction()
+			local ins = self:ins()
 			ins:rex_reg(dst, src)
 			ins:opcode(0x8B)
 			ins:reg_reg(dst, src)
-			self:emit_instruction(ins:get())
+			ins:encode()
 		end
 
 		local function reg_to_mem(self, dst, src)
-			local ins = self:instruction()
+			local ins = self:ins()
 			ins:rex_reg(src, dst)
 			ins:opcode(0x89)
 			ins:reg_reg(src, dst)
-			self:emit_instruction(ins:get())
+			ins:encode()
 		end
 
 		local function reg_to_moff(self, dst, src)
 			if type(dst.disp) == "cdata" then
 				if src.reg == "rax" then
-					local ins = self:instruction()
+					local ins = self:ins()
 					ins:rex_reg(src)
 					ins:opcode(0xA3)
-					self:emit_instruction(ins:get())
+					ins:encode()
 					self:emit_u64(dst.disp)
 					return
 				end
@@ -854,46 +841,46 @@ return function(Assembler)
 				self:mov(R.r11, dst.disp)
 
 				do
-					local ins = self:instruction()
+					local ins = self:ins()
 					ins:rex_reg(R.r11:memory_address(), src)
 					ins:opcode(0x89)
 					ins:reg_reg(src, R.r11:memory_address())
-					self:emit_instruction(ins:get())
+					ins:encode()
 				end
 
 				self:pop(R.r11)
 			else
-				local ins = self:instruction()
+				local ins = self:ins()
 				ins:rex_reg(dst, src)
 				ins:opcode(0x89)
 				ins:reg_reg(src, dst)
-				self:emit_instruction(ins:get())
+				ins:encode()
 			end
 		end
 
 		local function moff_to_reg(self, dst, src)
 			if type(src.disp) == "cdata" then
 				if dst.reg == "rax" then
-					local ins = self:instruction()
+					local ins = self:ins()
 					ins:rex_reg(dst)
 					ins:opcode(0xA1)
-					self:emit_instruction(ins:get())
+					ins:encode()
 					self:emit_u64(src.disp)
 					return
 				end
 
 				self:mov(dst, src.disp)
-				local ins = self:instruction()
+				local ins = self:ins()
 				ins:rex_reg(dst, dst)
 				ins:opcode(0x8B)
 				ins:reg_reg(dst, dst:memory_address())
-				self:emit_instruction(ins:get())
+				ins:encode()
 			else
-				local ins = self:instruction()
+				local ins = self:ins()
 				ins:rex_reg(src, dst)
 				ins:opcode(0x8B)
 				ins:reg_reg(dst, src)
-				self:emit_instruction(ins:get())
+				ins:encode()
 			end
 		end
 
@@ -931,34 +918,32 @@ return function(Assembler)
 
 		-- je function
 		function Assembler:je(label)
-			local ins = self:instruction()
-			ins:opcode(0x0F, 0x84)
-			self:emit_instruction(ins:get())
+			self:opcode(0x0F, 0x84)
 			local ref_pos = self:get_reference_label(label, "near", 4)
 			self:emit(0, 0, 0, 0)
 		end
 
 		function Assembler:jne(label)
-			self:emit_opcode(0x0F, 0x85)
+			self:opcode(0x0F, 0x85)
 			local ref_pos = self:get_reference_label(label, "near", 4)
 			self:emit(0, 0, 0, 0)
 		end
 
 		function Assembler:jl(label)
-			self:emit_opcode(0x0F, 0x8C)
+			self:opcode(0x0F, 0x8C)
 			local ref_pos = self:get_reference_label(label, "near", 4)
 			self:emit(0, 0, 0, 0)
 		end
 
 		function Assembler:jle(label)
-			self:emit_opcode(0x0F, 0x8E)
+			self:opcode(0x0F, 0x8E)
 			local ref_pos = self:get_reference_label(label, "near", 4)
 			self:emit(0, 0, 0, 0)
 		end
 
 		function Assembler:jg(label)
 			local jump_pos = self.pos
-			self:emit_opcode(0x0F, 0x8F)
+			self:opcode(0x0F, 0x8F)
 
 			if not self.labels[label] then
 				self.labels[label] = {references = {}, defined = false}
@@ -976,7 +961,8 @@ return function(Assembler)
 		end
 
 		function Assembler:jge(label)
-			self:emit_opcode(0x0F, 0x8D)
+			local jump_pos = self.pos
+			self:opcode(0x0F, 0x8D)
 			local ref_pos = self:get_reference_label(label, "near", 4)
 			self:emit(0, 0, 0, 0)
 		end
@@ -987,7 +973,8 @@ return function(Assembler)
 			if self.labels[label] and self.labels[label].defined then
 				local target_pos = self.labels[label].pos
 				local rel32 = target_pos - (jump_pos + 6)
-				self:emit_opcode(0x0F, 0x85)
+				self:opcode(0x0F, 0x85)
+				local jump_pos = self.pos
 				self:emit_i32(rel32)
 			else
 				if not self.labels[label] then
@@ -1002,14 +989,14 @@ return function(Assembler)
 						size = 6,
 					}
 				)
-				self:emit(0x0F, 0x85)
+				self:opcode(0x0F, 0x85)
 				self:emit(0, 0, 0, 0)
 			end
 		end
 
 		function Assembler:jmp(label)
 			local jump_pos = self.pos
-			self:emit_opcode(0xE9)
+			self:opcode(0xE9)
 
 			if not self.labels[label] then
 				self.labels[label] = {references = {}, defined = false}
@@ -1059,51 +1046,48 @@ return function(Assembler)
 
 	do -- basic functions
 		function Assembler:ret()
-			self:emit_opcode(0xC3)
+			self:opcode(0xC3)
 		end
 
 		function Assembler:push(reg)
-			local ins = self:instruction()
+			local ins = self:ins()
 
-			if reg.is_extended then ins:extend_modrm_rm() -- replaces rex_b prefix
-			end
+			if reg.is_extended then ins:extend_opcode_reg() end
 
 			ins:opcode(0x50 + reg.i)
-			self:emit_instruction(ins:get())
+			ins:encode()
 		end
 
 		function Assembler:pop(reg)
-			local ins = self:instruction()
+			local ins = self:ins()
 
-			if reg.is_extended then ins:extend_modrm_rm() -- replaces rex_b prefix
-			end
+			if reg.is_extended then ins:extend_opcode_reg() end
 
 			ins:opcode(0x58 + reg.i)
-			self:emit_instruction(ins:get())
+			ins:encode()
 		end
 
 		function Assembler:syscall()
-			local ins = self:instruction()
-			ins:opcode(0x0F, 0x05)
-			self:emit_instruction(ins:get())
+			self:opcode(0x0F, 0x05):encode()
 		end
 
 		local function handle_immediate_operation(self, reg, imm, extension)
+			local ins = self:ins()
+			ins:rex_reg(reg)
+
 			if imm >= -128 and imm <= 127 then
-				local ins = self:instruction()
 				ins:opcode(0x83)
 				ins:modrm_mode("direct")
 				ins:modrm_reg(extension)
 				ins:modrm_rm(reg.i)
-				self:emit_instruction(ins:get())
+				ins:encode()
 				self:emit_i8(imm)
 			else
-				local ins = self:instruction()
 				ins:opcode(0x81)
 				ins:modrm_mode("direct")
 				ins:modrm_reg(extension)
 				ins:modrm_rm(reg.i)
-				self:emit_instruction(ins:get())
+				ins:encode()
 				self:emit_i32(imm)
 			end
 		end
@@ -1111,25 +1095,61 @@ return function(Assembler)
 		do
 			function Assembler:add(reg1, op2)
 				if type(op2) == "number" then
-					self:rex_reg(reg1)
-					handle_immediate_operation(self, reg1, op2, 0)
+					local ins = self:ins()
+					ins:rex_reg(reg1)
+
+					if op2 >= -128 and op2 <= 127 then
+						ins:opcode(0x83)
+						ins:modrm_mode("direct")
+						ins:modrm_reg(0) -- extension for ADD
+						ins:modrm_rm(reg1.i)
+						ins:encode()
+						self:emit_i8(op2)
+					else
+						ins:opcode(0x81)
+						ins:modrm_mode("direct")
+						ins:modrm_reg(0) -- extension for ADD
+						ins:modrm_rm(reg1.i)
+						ins:encode()
+						self:emit_i32(op2)
+					end
 				else
 					local reg2 = op2
-					self:rex_reg(reg1, reg2)
-					self:emit(0x03)
-					self:emit_modrmsib(reg1, reg2)
+					local ins = self:ins()
+					ins:rex_reg(reg1, reg2)
+					ins:opcode(0x03)
+					ins:reg_reg(reg1, reg2)
+					ins:encode()
 				end
 			end
 
 			function Assembler:sub(reg1, op2)
 				if type(op2) == "number" then
-					self:rex_reg(reg1)
-					handle_immediate_operation(self, reg1, op2, 5)
+					local ins = self:ins()
+					ins:rex_reg(reg1)
+
+					if op2 >= -128 and op2 <= 127 then
+						ins:opcode(0x83)
+						ins:modrm_mode("direct")
+						ins:modrm_reg(5) -- extension for SUB
+						ins:modrm_rm(reg1.i)
+						ins:encode()
+						self:emit_i8(op2)
+					else
+						ins:opcode(0x81)
+						ins:modrm_mode("direct")
+						ins:modrm_reg(5) -- extension for SUB
+						ins:modrm_rm(reg1.i)
+						ins:encode()
+						self:emit_i32(op2)
+					end
 				else
 					local reg2 = op2
-					self:rex_reg(reg1, reg2)
-					self:emit(0x2B)
-					self:emit_modrmsib(reg1, reg2)
+					local ins = self:ins()
+					ins:rex_reg(reg1, reg2)
+					ins:opcode(0x2B)
+					ins:reg_reg(reg1, reg2)
+					ins:encode()
 				end
 			end
 
@@ -1137,100 +1157,121 @@ return function(Assembler)
 				assert(reg1.bits == 64, "only supports 64-bit registers")
 
 				if type(op2) == "number" then
-					self:rex_reg(reg1)
-					handle_immediate_operation(self, reg1, op2, 7)
+					local ins = self:ins()
+					ins:rex_reg(reg1)
+
+					if op2 >= -128 and op2 <= 127 then
+						ins:opcode(0x83)
+						ins:modrm_mode("direct")
+						ins:modrm_reg(7) -- extension for CMP
+						ins:modrm_rm(reg1.i)
+						ins:encode()
+						self:emit_i8(op2)
+					else
+						ins:opcode(0x81)
+						ins:modrm_mode("direct")
+						ins:modrm_reg(7) -- extension for CMP
+						ins:modrm_rm(reg1.i)
+						ins:encode()
+						self:emit_i32(op2)
+					end
 				else
 					local reg2 = op2
-					self:rex_reg(reg1, reg2)
-					self:emit(0x3B)
-					self:emit_modrmsib(reg1, reg2)
+					local ins = self:ins()
+					ins:rex_reg(reg1, reg2)
+					ins:opcode(0x3B)
+					ins:reg_reg(reg1, reg2)
+					ins:encode()
 				end
 			end
 		end
 
 		function Assembler:inc(reg)
-			local ins = self:instruction()
-
-			if reg.bits == 64 then ins:wide_mode() end
-
-			if reg.is_extended == 64 then ins:extend_opcode_reg() end
-
+			local ins = self:ins()
+			ins:rex_reg(reg)
 			ins:opcode(0xFF)
 			ins:modrm_mode("direct")
 			ins:modrm_reg(0)
 			ins:modrm_rm(reg.i)
-			self:emit_instruction(ins:get())
+			ins:encode()
 		end
 
 		function Assembler:dec(reg)
-			local ins = self:instruction()
-
-			if reg.bits == 64 then ins:wide_mode() end
-
-			if reg.is_extended == 64 then ins:extend_opcode_reg() end
-
+			local ins = self:ins()
+			ins:rex_reg(reg)
 			ins:opcode(0xFF)
 			ins:modrm_mode("direct")
 			ins:modrm_reg(1)
 			ins:modrm_rm(reg.i)
-			self:emit_instruction(ins:get())
+			ins:encode()
 		end
 
 		function Assembler:mul(reg)
-			self:rex_reg(reg)
-			self:emit(0xF7)
-			local ins = self:instruction()
+			local ins = self:ins()
+			ins:rex_reg(reg)
+			ins:opcode(0xF7)
 			ins:modrm_mode("direct")
 			ins:modrm_reg(4)
 			ins:modrm_rm(reg.i)
-			self:emit_instruction(ins:get())
+			ins:encode()
 		end
 
 		do
 			do -- xor
 				local function reg_to_reg(self, dst, src)
-					local ins = self:instruction()
+					local ins = self:ins()
 					ins:rex_reg(dst, src)
 					ins:opcode(0x33)
 					ins:reg_reg(dst, src)
-					self:emit_instruction(ins:get())
+					ins:encode()
 				end
 
 				local function mem_to_reg(self, dst, src)
-					local ins = self:instruction()
+					local ins = self:ins()
 					ins:rex_reg(dst, src)
 					ins:opcode(0x33) -- XOR r64, r/m64
 					ins:reg_reg(dst, src)
-					self:emit_instruction(ins:get())
+					ins:encode()
 				end
 
 				local function reg_to_mem(self, dst, src)
-					local ins = self:instruction()
+					local ins = self:ins()
 					ins:rex_reg(src, dst)
 					ins:opcode(0x31) -- XOR r/m64, r64
 					ins:reg_reg(src, dst)
-					self:emit_instruction(ins:get())
+					ins:encode()
 				end
 
 				local function imm_to_reg(self, dst, imm)
-					self:rex_reg(dst)
 					handle_immediate_operation(self, dst, imm, 6) -- 6 is XOR in ModR/M
 				end
 
 				local function imm_to_mem(self, dst, imm)
-					self:rex_reg(dst)
+					local ins = self:ins()
+					ins:rex_reg(dst)
 
 					if imm >= -128 and imm <= 127 then
-						self:emit(0x83) -- XOR r/m64, imm8
-						self:emit(0x34) -- ModR/M byte: 00 110 100
-						self:emit(0x25) -- SIB byte: 00 100 101 for absolute addressing
-						self:emit_i32(dst.disp) -- The absolute address
+						ins:opcode(0x83) -- XOR r/m64, imm8
+					else
+						ins:opcode(0x81) -- XOR r/m64, imm32
+					end
+
+					-- Set up ModR/M byte
+					ins:modrm_mode("indirect") -- 00 in ModR/M
+					ins:modrm_reg(6) -- 110 in ModR/M (6 is XOR operation)
+					ins:modrm_use_sib() -- Use SIB byte (rm = 4)
+					-- Set up SIB byte
+					ins:sib_scale(1)
+					ins:sib_base(5) -- No base register, use displacement only
+					-- Add displacement
+					ins:displace(dst.disp)
+					-- Emit the instruction
+					ins:encode()
+
+					-- Emit the immediate value
+					if imm >= -128 and imm <= 127 then
 						self:emit_i8(imm)
 					else
-						self:emit(0x81) -- XOR r/m64, imm32
-						self:emit(0x34) -- ModR/M byte: 00 110 100
-						self:emit(0x25) -- SIB byte: 00 100 101 for absolute addressing
-						self:emit_i32(dst.disp) -- The absolute address
 						self:emit_i32(imm)
 					end
 				end
