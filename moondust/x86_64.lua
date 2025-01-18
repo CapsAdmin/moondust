@@ -55,60 +55,9 @@ return function(Assembler)
 		create_register_family("zmm", 512, 32, {class = "simd", width = 512})
 		reginfo.rip = {bits = 64, rip = true, class = "ip", i = 5}
 
-		local function validate_scale(scale)
-			local valid_scales = {[1] = true, [2] = true, [4] = true, [8] = true}
-
-			if scale and not valid_scales[scale] then
-				error("Invalid scale value: " .. tostring(scale) .. ". Must be 1, 2, 4, or 8", 2)
-			end
-		end
-
-		local function validate_displacement(disp)
-			if disp == nil then return end
-
-			if type(disp) == "number" then return end
-
-			if type(disp) == "cdata" and tonumber(disp) then return end
-
-			error("Displacement must be a number, got: " .. type(disp), 2)
-		end
-
 		local function validate_register_name(reg_name)
 			if not reginfo[reg_name] then
 				error(reg_name .. " is not a valid register", 2)
-			end
-		end
-
-		local function validate_combinations(result)
-			if result.rip then
-				if result.index or result.scale or result.base then
-
-				--error("RIP-relative addressing cannot use index, scale, or base", 2)
-				end
-			end
-
-			if result.index == "esp" or result.index == "rsp" then
-				error("ESP/RSP cannot be used as an index register", 2)
-			end
-
-			if result.scale and not result.index then
-				error("Scale can only be used with an index register", 2)
-			end
-
-			if result.class == "simd" then
-				if
-					result.index and
-					reginfo[result.index].class == "simd" and
-					reginfo[result.index].width ~= result.width
-				then
-					error("SIMD registers must have matching widths", 2)
-				end
-			end
-
-			if result.class == "mask" then
-				if result.index or result.scale then
-					error("Mask registers cannot be used with index or scale", 2)
-				end
 			end
 		end
 
@@ -255,14 +204,12 @@ return function(Assembler)
 					new[k] = v
 				end
 
-				validate_combinations(new)
 				assert(type(new.i) == "number", "Register index must be a number")
 				return setmetatable(new, Register)
 			elseif type(val) == "table" then
 				local new = {}
 
 				if val.indirect and val.disp and not (val.reg or val.base or val.index) then
-					validate_displacement(val.disp)
 					new.i = 0
 
 					for k, v in pairs(val) do
@@ -283,14 +230,9 @@ return function(Assembler)
 					end
 				end
 
-				validate_scale(val.scale)
-				validate_displacement(val.disp)
-
 				for k, v in pairs(val) do
 					if k ~= "reg" and k ~= "index" and k ~= "base" then new[k] = v end
 				end
-
-				validate_combinations(new)
 
 				for _, key in ipairs({"reg", "index", "base"}) do
 					if new[key] then
@@ -677,6 +619,15 @@ return function(Assembler)
 			indirect32 = 0b10000000,
 			direct = 0b11000000,
 		}
+		local valid_scales = {[1] = true, [2] = true, [4] = true, [8] = true}
+
+		local function validate_scale(scale)
+			if not scale then return end
+
+			if not valid_scales[scale] then
+				error("Invalid scale value: " .. tostring(scale) .. ". Must be 1, 2, 4, or 8", 2)
+			end
+		end
 
 		local function modrm(mode, reg, rm)
 			assert(reg >= 0 and reg <= 7, "reg must be between 0 and 7")
@@ -689,11 +640,11 @@ return function(Assembler)
 		end
 
 		local function sib(scale, index, base)
-			assert(scale_bits[scale], "scale must be 1, 2, 4, or 8")
+			validate_scale(scale)
 			assert(index ~= 4, "sib index cannot be 4, however it can be nil")
 			assert(index == nil or index >= 0 and index <= 7, "index register must be between 0 - 7")
 			assert(base >= 0 and base <= 7, "base register must be between 0 - 7")
-			local byte = scale_bits[scale] -- scale bits 0b**000000
+			local byte = scale_bits[scale] or 0 -- scale bits 0b**000000
 			byte = bit.bor(byte, bit.lshift(index or 4, 3)) -- index bits 0b00***000
 			byte = bit.bor(byte, base) -- base bits 0b00000***
 			return byte
@@ -702,40 +653,47 @@ return function(Assembler)
 		local SIB_INDICATOR = 4
 		local RIP_RELATIVE = 5
 
+		local function validate_displacement(disp)
+			if disp == nil then return end
+
+			if type(disp) == "number" then return end
+
+			if type(disp) == "cdata" and tonumber(disp) then return end
+
+			error("Displacement must be a number, got: " .. type(disp), 2)
+		end
+
 		function Assembler:emit_instruction(info)
 			if info.prefix then self:emit(prefix(info.prefix)) end
 
 			if info.opcode then self:emit(opcode(unpack(info.opcode))) end
 
-			local mode -- Moved mode declaration to outer scope
+			local mode
+
 			if info.modrm then
-				mode = info.modrm.mode -- Just assign here instead of declaring
-				if mode == "indirect8" then
-					if not info.disp then error("8-bit displacement required", 2) end
-				elseif mode == "indirect32" then
-					if not info.disp then error("32-bit displacement required", 2) end
+				mode = info.modrm.mode
+
+				if mode ~= "direct" and not info.sib and info.modrm.rm == SIB_INDICATOR then
+					error("SIB required", 2)
 				end
 
-				if mode ~= "direct" and info.modrm.rm == SIB_INDICATOR then
-					if not info.sib then error("SIB required", 2) end
-				end
-
-				if mode == "indirect" and info.modrm.rm == RIP_RELATIVE then
-					if not info.disp then
-						error("32-bit displacement required for displacement-only addressing", 2)
+				if not info.disp then
+					if mode == "indirect8" then
+						error("8-bit displacement required", 2)
+					elseif mode == "indirect32" then
+						error("32-bit displacement required", 2)
 					end
-				end
 
-				if mode == "direct" and info.modrm.rm == RIP_RELATIVE then
-					if not info.disp then
-
-					--error("rip-relative addressing requires displacement", 2) -- TODO
+					if mode == "indirect" then
+						if info.modrm.rm == RIP_RELATIVE then
+							error("32-bit displacement required for displacement-only addressing", 2)
+						end
 					end
-				end
 
-				if info.sib and info.sib.base == RIP_RELATIVE and mode == "indirect" then
-					if not info.disp then
-						error("32-bit displacement required when SIB base is 5 and mod is 0", 2)
+					if mode == "direct" or mode == "indirect" then
+						if info.sib and info.sib.base == RIP_RELATIVE then
+							error("32-bit displacement required for rip-relative addressing", 2)
+						end
 					end
 				end
 
@@ -743,15 +701,16 @@ return function(Assembler)
 			end
 
 			if info.sib then
+				if info.prefix and has_key(info.prefix, "rex_x") and info.sib.index == 4 then
+					error("Cannot use RSP/R12 as SIB index register")
+				end
+
 				self:emit(sib(info.sib.scale, info.sib.index, info.sib.base))
 			end
 
 			if info.disp then
 				local num = info.disp
-				assert(
-					type(num) == "number" or type(num) == "cdata",
-					"displacement must be a number"
-				)
+				validate_displacement(num)
 				local signed = true
 				local bits = 8
 

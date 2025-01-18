@@ -965,3 +965,158 @@ test("xor operations", function(asm)
 	print(asm:debug_disassemble())
 	asm:build("void (*)(void)")()
 end)
+
+test("modrm and sib errors", function(asm)
+	-- Test 1: SIB required error
+	expect_error(
+		function()
+			asm:emit_instruction(
+				{
+					opcode = {0x89},
+					modrm = {
+						mode = "indirect",
+						reg = 0,
+						rm = 4, -- SIB indicator without SIB byte
+					},
+				}
+			)
+		end,
+		"SIB required"
+	)
+
+	-- Test 2: 8-bit displacement required
+	expect_error(
+		function()
+			asm:emit_instruction(
+				{
+					opcode = {0x89},
+					modrm = {
+						mode = "indirect8",
+						reg = 0,
+						rm = 1,
+					},
+				}
+			)
+		end,
+		"8-bit displacement required"
+	)
+
+	-- Test 3: 32-bit displacement required
+	expect_error(
+		function()
+			asm:emit_instruction(
+				{
+					opcode = {0x89},
+					modrm = {
+						mode = "indirect32",
+						reg = 0,
+						rm = 1,
+					},
+				}
+			)
+		end,
+		"32-bit displacement required"
+	)
+
+	-- Test 4: 32-bit displacement required for displacement-only addressing
+	expect_error(
+		function()
+			asm:emit_instruction(
+				{
+					opcode = {0x89},
+					modrm = {
+						mode = "indirect",
+						reg = 0,
+						rm = 5, -- RIP_RELATIVE
+					},
+				}
+			)
+		end,
+		"32-bit displacement required for displacement-only addressing"
+	)
+
+	-- Test 5: 32-bit displacement required for rip-relative addressing
+	expect_error(
+		function()
+			asm:emit_instruction(
+				{
+					opcode = {0x89},
+					modrm = {
+						mode = "indirect",
+						reg = 0,
+						rm = 4, -- SIB indicator
+					},
+					sib = {
+						base = 5, -- RIP_RELATIVE
+						index = 0,
+						scale = 1,
+					},
+				}
+			)
+		end,
+		"32-bit displacement required for rip-relative addressing"
+	)
+
+	-- Test 6: Cannot use RSP/R12 as SIB index register
+	expect_error(
+		function()
+			asm:emit_instruction(
+				{
+					opcode = {0x89},
+					modrm = {
+						mode = "indirect",
+						reg = 0,
+						rm = 4,
+					},
+					prefix = {"rex_x"},
+					sib = {
+						scale = 1,
+						index = 4, -- RSP/R12
+						base = 0,
+					},
+				}
+			)
+		end,
+		"Cannot use RSP/R12 as SIB index register"
+	)
+
+	-- Test 7: Invalid scale value
+	expect_error(
+		function()
+			asm:emit_instruction(
+				{
+					opcode = {0x89},
+					modrm = {
+						mode = "indirect",
+						reg = 0,
+						rm = 4,
+					},
+					sib = {
+						scale = 3, -- Invalid scale (must be 1, 2, 4, or 8)
+						index = 0,
+						base = 0,
+					},
+				}
+			)
+		end,
+		"Invalid scale value"
+	)
+
+	-- Test 8: Invalid displacement type
+	expect_error(
+		function()
+			asm:emit_instruction(
+				{
+					opcode = {0x89},
+					modrm = {
+						mode = "indirect8",
+						reg = 0,
+						rm = 1,
+					},
+					disp = "invalid", -- Displacement must be a number
+				}
+			)
+		end,
+		"Displacement must be a number"
+	)
+end)
