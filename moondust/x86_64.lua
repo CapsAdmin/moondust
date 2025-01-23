@@ -318,6 +318,12 @@ return function(Assembler)
 			return self
 		end
 
+		function Instruction:opcode_ext(v)
+			self.ctx.modrm = self.ctx.modrm or {}
+			self.ctx.modrm.reg = v
+			return self
+		end
+
 		function Instruction:modrm_rm(v)
 			self.ctx.modrm = self.ctx.modrm or {}
 			self.ctx.modrm.rm = v
@@ -356,7 +362,24 @@ return function(Assembler)
 			return self
 		end
 
+		function Instruction:imm(num)
+			self.ctx.imm = num
+			return self
+		end
+
+		function Instruction:imm8(num)
+			self.ctx.imm8 = num
+			return self
+		end
+
+		function Instruction:imm32(num)
+			self.ctx.imm32 = num
+			return self
+		end
+
 		function Instruction:rex_reg(reg2, reg1, index_reg)
+			if type(reg1) == "number" then reg1 = nil end
+
 			if (reg1 and reg1.bits == 64) or (reg2 and reg2.bits == 64) then
 				self:wide_mode()
 			end
@@ -370,67 +393,69 @@ return function(Assembler)
 			return self
 		end
 
-		function Instruction:reg_reg(reg1, reg2)
-			if reg2.indirect and reg2.disp and not reg2.reg and not reg2.base and not reg2.index then
-				self:modrm_mode("indirect") -- 0 = indirect
-				self:modrm_reg(reg1.i)
-				self:modrm_use_sib()
-				self:sib_scale(1)
-				self:sib_base(NO_BASE) -- 5 = no base
-				self:displace(reg2.disp)
-				return self
-			elseif reg1.indirect and reg1.disp and not reg1.reg and not reg1.base and not reg1.index then
+		function Instruction:setup_operands(dst, src)
+			src = src or dst
+
+			if src.indirect and src.disp and not src.reg and not src.base and not src.index then
 				self:modrm_mode("indirect")
-				self:modrm_reg(reg2.i)
+				self:modrm_reg(dst.i)
 				self:modrm_use_sib()
 				self:sib_scale(1)
 				self:sib_base(NO_BASE)
-				self:displace(reg1.disp)
+				self:displace(src.disp)
+				return self
+			elseif dst.indirect and dst.disp and not dst.reg and not dst.base and not dst.index then
+				self:modrm_mode("indirect")
+				self:modrm_reg(src.i)
+				self:modrm_use_sib()
+				self:sib_scale(1)
+				self:sib_base(NO_BASE)
+				self:displace(dst.disp)
 				return self
 			end
 
-			if not reg2.indirect and not reg2.index and not reg2.scale and not reg2.rip then
+			if not src.indirect and not src.index and not src.scale and not src.rip then
 				self:modrm_mode("direct")
-				self:modrm_reg(reg1.i)
-				self:modrm_rm(reg2.i)
+				self:modrm_reg(dst.i)
+				self:modrm_rm(src.i)
 				return self
 			end
 
 			-- Special case: r12/rsp used as base requires SIB byte
-			if reg2.indirect and (reg2.reg == "r12" or reg2.reg == "rsp") then
+			if src.indirect and (src.reg == "r12" or src.reg == "rsp") then
 				self:modrm_mode("indirect")
-				self:modrm_reg(reg1.i)
+				self:modrm_reg(dst.i)
 				self:modrm_use_sib()
 				self:sib_scale(1)
-				self:sib_base(reg2.i)
+				self:sib_base(src.i)
 				return self
 			end
 
-			if reg2.rip then
+			if src.rip then
 				self:modrm_mode("indirect")
-				self:modrm_reg(reg1.i)
+				self:modrm_reg(dst.i)
 				self:modrm_rm(RIP_RELATIVE)
-				self:displace(reg2.disp or 0)
+				self:displace(src.disp or 0)
 				return self
 			end
 
-			if reg2.index and reg2.scale and not reg2.base then
+			if src.index and src.scale and not src.base then
 				self:modrm_mode("indirect")
-				self:modrm_reg(reg1.i)
+				self:modrm_reg(dst.i)
 				self:modrm_use_sib()
-				self:sib_scale(reg2.scale)
-				self:sib_reg(R[reg2.index].i)
+				self:sib_scale(src.scale)
+				self:sib_reg(R[src.index].i)
 				self:sib_base(NO_BASE)
-				self:displace(reg2.disp or 0)
+				self:displace(src.disp or 0)
 				return self
 			end
 
 			local mod = "indirect"
+			local disp = src.disp
 			local effective_disp = nil
-			local disp = reg2.disp
-			local is_bp = reg2.reg and (reg2.reg == "ebp" or reg2.reg == "rbp")
+			local is_bp = src.reg and (src.reg == "ebp" or src.reg == "rbp")
 
-			if not disp and reg2.reg and (is_bp or reg2.reg == "r13") then
+			if not disp and src.reg and (is_bp or src.reg == "r13") then
 				mod = "indirect8"
 				effective_disp = 0
 			elseif not disp or (disp == 0 and not is_bp) then
@@ -443,22 +468,23 @@ return function(Assembler)
 				effective_disp = disp
 			end
 
-			if reg2.index or reg2.scale or reg2.reg == "rsp" or reg2.reg == "esp" then
+			if src.index or src.scale or src.reg == "rsp" or src.reg == "esp" then
 				self:modrm_mode(mod)
-				self:modrm_reg(reg1.i)
+				self:modrm_reg(dst.i)
 				self:modrm_use_sib()
-				local index_reg = reg2.index and R[reg2.index] or nil
-				local base_reg = reg2.base and R[reg2.base] or reg2
-				self:sib_scale(reg2.scale)
+				local index_reg = src.index and R[src.index] or nil
+				local base_reg = src.base and R[src.base] or src
+				self:sib_scale(src.scale)
 				self:sib_reg(index_reg and index_reg.i)
 				self:sib_base(base_reg and base_reg.i)
 			else
 				self:modrm_mode(mod)
-				self:modrm_reg(reg1.i)
-				self:modrm_rm(reg2.i)
+				self:modrm_reg(dst.i)
+				self:modrm_rm(src.i)
 			end
 
-			self:displace(effective_disp)
+			if effective_disp then self:displace(effective_disp) end
+
 			return self
 		end
 
@@ -476,7 +502,7 @@ return function(Assembler)
 	end
 
 	do
-		local function has_key(tbl, key)
+		local function table_has_value(tbl, key)
 			for i, v in ipairs(tbl) do
 				if v == key then return true end
 			end
@@ -484,125 +510,84 @@ return function(Assembler)
 			return false
 		end
 
-		local function emit_exclusive_key(out, prefixes, group)
-			local done
+		local function prefix(prefixes)
+			local out = {}
+			local legacy_prefixes = {
+				{
+					lock = 0xf0,
+					repne = 0xf2,
+					repe = 0xf3,
+				},
+				{
+					cs_segment_override = 0x2E,
+					ss_segment_override = 0x36,
+					ds_segment_override = 0x3E,
+					es_segment_override = 0x26,
+					fs_segment_override = 0x64,
+					gs_segment_override = 0x65,
+					branch_not_taken = 0x2E,
+					branch_taken = 0x3E,
+				},
+				{
+					operand_size_override = 0x66,
+				},
+				{
+					address_size_override = 0x67,
+				},
+			}
 
-			for _, prefix in ipairs(prefixes) do
-				local byte = group[prefix]
+			for _, group in ipairs(legacy_prefixes) do
+				for key, byte in pairs(group) do
+					if table_has_value(prefixes, key) then
+						local done
 
-				if byte then
-					table.insert(out, byte)
-					done = prefix
+						for _, prefix in ipairs(prefixes) do
+							local byte = group[prefix]
 
-					break
-				end
-			end
+							if byte then
+								table.insert(out, byte)
+								done = prefix
 
-			if done then
-				for _, prefix in ipairs(prefixes) do
-					if prefix ~= done then
-						local byte = group[prefix]
-
-						if byte then
-							local other_keys = {}
-
-							for key in pairs(group) do
-								if key ~= done then table.insert(other_keys, key) end
+								break
 							end
-
-							error(done .. " cannot coexist with " .. table.concat(other_keys, ", "))
 						end
+
+						if done then
+							for _, prefix in ipairs(prefixes) do
+								if prefix ~= done then
+									local byte = group[prefix]
+
+									if byte then
+										local other_keys = {}
+
+										for key in pairs(group) do
+											if key ~= done then table.insert(other_keys, key) end
+										end
+
+										error(done .. " cannot coexist with " .. table.concat(other_keys, ", "))
+									end
+								end
+							end
+						end
+
+						break
 					end
 				end
 			end
-		end
 
-		local legacy_prefixes = {
-			group_1 = {
-				lock = 0xf0,
-				repne = 0xf2,
-				repe = 0xf3,
-			},
-			group_2 = {
-				cs_segment_override = 0x2E,
-				ss_segment_override = 0x36,
-				ds_segment_override = 0x3E,
-				es_segment_override = 0x26,
-				fs_segment_override = 0x64,
-				gs_segment_override = 0x65,
-				branch_not_taken = 0x2E,
-				branch_taken = 0x3E,
-			},
-			group_3 = {
-				operand_size_override = 0x66,
-			},
-			group_4 = {
-				address_size_override = 0x67,
-			},
-		}
+			local rex_byte = 0x40
+			local rex_flags = {
+				rex_w = 0x08,
+				rex_r = 0x04,
+				rex_x = 0x02,
+				rex_b = 0x01,
+			}
 
-		local function emit_group_prefix(self, group, prefixes)
-			for key, byte in pairs(group) do
-				if has_key(prefixes, key) then
-					emit_exclusive_key(self, prefixes, group)
-
-					break
-				end
+			for flag, bitmask in pairs(rex_flags) do
+				if table_has_value(prefixes, flag) then rex_byte = bit.bor(rex_byte, bitmask) end
 			end
-		end
 
-		local scale_bits = {[1] = 0b00000000, [2] = 0b01000000, [4] = 0b10000000, [8] = 0b11000000}
-
-		local function prefix(p)
-			local out = {}
-			emit_group_prefix(out, legacy_prefixes.group_1, p)
-			emit_group_prefix(out, legacy_prefixes.group_2, p)
-			emit_group_prefix(out, legacy_prefixes.group_3, p)
-			emit_group_prefix(out, legacy_prefixes.group_4, p)
-
-			if
-				has_key(p, "rex_w") or
-				has_key(p, "rex_r") or
-				has_key(p, "rex_x") or
-				has_key(p, "rex_b")
-			then
-				local byte = 0b01000000
-
-				if has_key(p, "rex_w") then byte = bit.bor(byte, 0b00001000) end -- Operand size override (0 = default, 1 = 64-bit)
-				if has_key(p, "rex_r") then byte = bit.bor(byte, 0b00000100) end -- Extension of ModR/M reg field
-				if has_key(p, "rex_x") then byte = bit.bor(byte, 0b00000010) end -- Extension of SIB index field
-				if has_key(p, "rex_b") then byte = bit.bor(byte, 0b00000001) end -- Extension of ModR/M r/m field, SIB base field, or opcode reg field
-				if byte ~= 0b01000000 then table.insert(out, byte) end
-			elseif p.vex_pp and p.vex_l and p.vex_r then
-				error("2-byte VEX prefix not implemented")
-			elseif
-				p.vex_mmmm and
-				p.vex_pp and
-				p.vex_l and
-				p.vex_w and
-				(
-					p.vex_r or
-					p.vex_x or
-					p.vex_b
-				)
-			then
-				error("3-byte VEX prefix not implemented")
-			elseif
-				p.vex_mm and
-				p.vex_pp and
-				p.vex_l and
-				p.vex_w and
-				(
-					p.vex_r or
-					p.vex_x or
-					p.vex_b
-				)
-				and
-				p.vex_z and
-				p.vex_b
-			then
-				error("EVEX prefix not implemented")
-			end
+			if rex_byte ~= 0x40 then table.insert(out, rex_byte) end
 
 			return unpack(out)
 		end
@@ -638,6 +623,8 @@ return function(Assembler)
 			byte = bit.bor(byte, rm) -- R/M bits 0b00000***
 			return byte
 		end
+
+		local scale_bits = {[1] = 0b00000000, [2] = 0b01000000, [4] = 0b10000000, [8] = 0b11000000}
 
 		local function sib(scale, index, base)
 			validate_scale(scale)
@@ -701,7 +688,7 @@ return function(Assembler)
 			end
 
 			if info.sib then
-				if info.prefix and has_key(info.prefix, "rex_x") and info.sib.index == 4 then
+				if info.prefix and table_has_value(info.prefix, "rex_x") and info.sib.index == 4 then
 					error("Cannot use RSP/R12 as SIB index register")
 				end
 
@@ -734,125 +721,206 @@ return function(Assembler)
 
 				self:emit_number(num, bits, signed)
 			end
+
+			if info.imm then
+				local n = info.imm
+
+				if n >= -128 and n <= 127 then
+					self:emit_i8(n)
+				elseif n >= -32768 and n <= 32767 then
+					self:emit_i32(n)
+				else
+					error("Invalid immediate value: " .. tostring(n))
+				end
+			elseif info.imm8 then
+				self:emit_i8(info.imm8)
+			elseif info.imm32 then
+				self:emit_i32(info.imm32)
+			end
 		end
 	end
 
-	do -- mov
-		local function imm_to_reg(self, dst, imm, signed)
-			local ins = self:ins()
+	function Assembler:mov(dst, src, signed)
+		local ins = self:ins()
+
+		if tonumber(src) then
+			-- Immediate to register
 			ins:rex_reg(dst)
 			ins:opcode(0xB8 + dst.i)
 			ins:encode()
 
 			if dst.bits == 64 then
-				if signed then self:emit_i64(imm) else self:emit_u64(imm) end
+				if signed then self:emit_i64(src) else self:emit_u64(src) end
 			else
-				if signed then self:emit_i32(imm) else self:emit_u32(imm) end
+				if signed then self:emit_i32(src) else self:emit_u32(src) end
 			end
-		end
 
-		local function reg_to_reg(self, dst, src)
-			local ins = self:ins()
+			return
+		elseif src:pure_displacement() and type(src.disp) == "cdata" and dst.reg == "rax" then
+			-- Load from 64-bit displacement to rax (special encoding)
+			ins:rex_reg(dst)
+			ins:opcode(0xA1)
+			ins:encode()
+			self:emit_u64(src.disp)
+			return
+		elseif src:pure_displacement() and type(src.disp) == "cdata" then
+			-- Load from 64-bit displacement to register (through memory)
+			self:mov(dst, src.disp)
+			ins:rex_reg(dst, dst)
+			ins:opcode(0x8B)
+			ins:setup_operands(dst, dst:memory_address())
+		elseif src:pure_displacement() then
+			-- Load from regular displacement
+			ins:rex_reg(src, dst)
+			ins:opcode(0x8B)
+			ins:setup_operands(dst, src)
+		elseif dst:pure_displacement() and type(dst.disp) == "cdata" and src.reg == "rax" then
+			-- Store rax to 64-bit displacement (special encoding)
+			ins:rex_reg(src)
+			ins:opcode(0xA3)
+			ins:displace(dst.disp)
+		elseif dst:pure_displacement() and type(dst.disp) == "cdata" then
+			-- Store to 64-bit displacement (through temporary register)
+			self:push(R.r11)
+			self:mov(R.r11, dst.disp)
+			ins:rex_reg(R.r11:memory_address(), src)
+			ins:opcode(0x89)
+			ins:setup_operands(src, R.r11:memory_address())
+			ins:encode()
+			self:pop(R.r11)
+			return
+		elseif dst:pure_displacement() then
+			-- Store to regular displacement
 			ins:rex_reg(dst, src)
 			ins:opcode(0x89)
-			ins:reg_reg(src, dst)
-			ins:encode()
-		end
-
-		local function mem_to_reg(self, dst, src)
-			local ins = self:ins()
+			ins:setup_operands(src, dst)
+		elseif src:is_indirect() then
+			-- Memory to register
 			ins:rex_reg(dst, src)
 			ins:opcode(0x8B)
-			ins:reg_reg(dst, src)
-			ins:encode()
-		end
-
-		local function reg_to_mem(self, dst, src)
-			local ins = self:ins()
+			ins:setup_operands(dst, src)
+		elseif dst:is_indirect() then
+			-- Register to memory
 			ins:rex_reg(src, dst)
 			ins:opcode(0x89)
-			ins:reg_reg(src, dst)
+			ins:setup_operands(src, dst)
+		elseif dst.reg and src.reg then
+			-- Register to register
+			ins:rex_reg(dst, src)
+			ins:opcode(0x89)
+			ins:setup_operands(src, dst)
+		else
+			error(
+				"mov " .. tostring(dst) .. ", " .. tostring(src) .. " is not a valid combination",
+				2
+			)
+		end
+
+		ins:encode()
+	end
+
+	do -- basic functions
+		function Assembler:ret()
+			self:opcode(0xC3)
+		end
+
+		function Assembler:push(reg)
+			local ins = self:ins()
+
+			if reg.is_extended then ins:extend_opcode_reg() end
+
+			ins:opcode(0x50 + reg.i)
 			ins:encode()
 		end
 
-		local function reg_to_moff(self, dst, src)
-			if type(dst.disp) == "cdata" then
-				if src.reg == "rax" then
-					local ins = self:ins()
-					ins:rex_reg(src)
-					ins:opcode(0xA3)
-					ins:encode()
-					self:emit_u64(dst.disp)
-					return
-				end
+		function Assembler:pop(reg)
+			local ins = self:ins()
 
-				self:push(R.r11)
-				self:mov(R.r11, dst.disp)
+			if reg.is_extended then ins:extend_opcode_reg() end
 
-				do
-					local ins = self:ins()
-					ins:rex_reg(R.r11:memory_address(), src)
-					ins:opcode(0x89)
-					ins:reg_reg(src, R.r11:memory_address())
-					ins:encode()
-				end
-
-				self:pop(R.r11)
-			else
-				local ins = self:ins()
-				ins:rex_reg(dst, src)
-				ins:opcode(0x89)
-				ins:reg_reg(src, dst)
-				ins:encode()
-			end
+			ins:opcode(0x58 + reg.i)
+			ins:encode()
 		end
 
-		local function moff_to_reg(self, dst, src)
-			if type(src.disp) == "cdata" then
-				if dst.reg == "rax" then
+		function Assembler:syscall()
+			self:opcode(0x0F, 0x05):encode()
+		end
+
+		do
+			local function dst_src_instruction(r_rm, rm_r, opcode_ext)
+				return function(self, dst, src)
 					local ins = self:ins()
-					ins:rex_reg(dst)
-					ins:opcode(0xA1)
+
+					if type(src) == "number" then
+						ins:rex_reg(dst)
+
+						if src >= -128 and src <= 127 then
+							ins:setup_operands(dst)
+							ins:opcode(0x83):opcode_ext(opcode_ext)
+							ins:imm8(src)
+						else
+							ins:setup_operands(dst)
+							ins:opcode(0x81):opcode_ext(opcode_ext)
+							ins:imm32(src)
+						end
+					else
+						ins:rex_reg(dst, src)
+
+						if src:is_indirect() then
+							ins:opcode(r_rm) -- reg ← r/m
+						else
+							ins:opcode(rm_r) -- r/m ← reg
+						end
+
+						ins:setup_operands(dst, src)
+					end
+
 					ins:encode()
-					self:emit_u64(src.disp)
-					return
 				end
-
-				self:mov(dst, src.disp)
-				local ins = self:ins()
-				ins:rex_reg(dst, dst)
-				ins:opcode(0x8B)
-				ins:reg_reg(dst, dst:memory_address())
-				ins:encode()
-			else
-				local ins = self:ins()
-				ins:rex_reg(src, dst)
-				ins:opcode(0x8B)
-				ins:reg_reg(dst, src)
-				ins:encode()
 			end
+
+			Assembler.add = dst_src_instruction(0x03, 0x01, 0)
+			Assembler.or_ = dst_src_instruction(0x0B, 0x09, 1)
+			Assembler.adc = dst_src_instruction(0x13, 0x11, 2)
+			Assembler.sbb = dst_src_instruction(0x1B, 0x19, 3)
+			Assembler.and_ = dst_src_instruction(0x23, 0x21, 4)
+			Assembler.sub = dst_src_instruction(0x2B, 0x29, 5)
+			Assembler.xor = dst_src_instruction(0x33, 0x31, 6)
+			Assembler.cmp = dst_src_instruction(0x3B, 0x39, 7)
 		end
 
-		function Assembler:mov(dst, src, signed)
-			if tonumber(src) then
-				imm_to_reg(self, dst, src, signed)
-			elseif src:pure_displacement() then
-				moff_to_reg(self, dst, src)
-			elseif dst:pure_displacement() then
-				reg_to_moff(self, dst, src)
-			elseif src:is_indirect() then
-				mem_to_reg(self, dst, src)
-			elseif dst:is_indirect() then
-				reg_to_mem(self, dst, src)
-			elseif dst.reg and src.reg then
-				reg_to_reg(self, dst, src)
-			else
-				error(
-					"mov " .. tostring(dst) .. ", " .. tostring(src) .. " is not a valid combination",
-					2
-				)
+		do
+			local function instruction(opcode, ext)
+				return function(self, dst)
+					local ins = self:ins()
+					ins:rex_reg(dst, src)
+					ins:opcode(opcode)
+					ins:setup_operands(dst, src)
+					ins:opcode_ext(ext)
+					ins:encode()
+				end
 			end
+
+			Assembler.inc = instruction(0xFF, 0)
+			Assembler.dec = instruction(0xFF, 1)
+			Assembler.not_ = instruction(0xFF, 2)
+			Assembler.neg = instruction(0xFF, 3)
+			Assembler.mul = instruction(0xF7, 4)
+			Assembler.imul = instruction(0xF7, 5)
+			Assembler.div = instruction(0xF7, 6)
 		end
+	end
+
+	function Assembler:lea(self, dst, src)
+		if not src:is_indirect() then
+			error("LEA requires indirect source operand")
+		end
+
+		local ins = self:ins()
+		ins:rex_reg(dst, src)
+		ins:opcode(0x8D)
+		ins:setup_operands(dst, src)
+		ins:encode()
 	end
 
 	do -- jump labels
@@ -943,268 +1011,6 @@ return function(Assembler)
 		end
 	end
 
-	do -- basic functions
-		function Assembler:ret()
-			self:opcode(0xC3)
-		end
-
-		function Assembler:push(reg)
-			local ins = self:ins()
-
-			if reg.is_extended then ins:extend_opcode_reg() end
-
-			ins:opcode(0x50 + reg.i)
-			ins:encode()
-		end
-
-		function Assembler:pop(reg)
-			local ins = self:ins()
-
-			if reg.is_extended then ins:extend_opcode_reg() end
-
-			ins:opcode(0x58 + reg.i)
-			ins:encode()
-		end
-
-		function Assembler:syscall()
-			self:opcode(0x0F, 0x05):encode()
-		end
-
-		local function handle_immediate_operation(self, reg, imm, extension)
-			local ins = self:ins()
-			ins:rex_reg(reg)
-
-			if imm >= -128 and imm <= 127 then
-				ins:opcode(0x83)
-				ins:modrm_mode("direct")
-				ins:modrm_reg(extension)
-				ins:modrm_rm(reg.i)
-				ins:encode()
-				self:emit_i8(imm)
-			else
-				ins:opcode(0x81)
-				ins:modrm_mode("direct")
-				ins:modrm_reg(extension)
-				ins:modrm_rm(reg.i)
-				ins:encode()
-				self:emit_i32(imm)
-			end
-		end
-
-		do
-			function Assembler:add(reg1, op2)
-				if type(op2) == "number" then
-					local ins = self:ins()
-					ins:rex_reg(reg1)
-
-					if op2 >= -128 and op2 <= 127 then
-						ins:opcode(0x83)
-						ins:modrm_mode("direct")
-						ins:modrm_reg(0) -- extension for ADD
-						ins:modrm_rm(reg1.i)
-						ins:encode()
-						self:emit_i8(op2)
-					else
-						ins:opcode(0x81)
-						ins:modrm_mode("direct")
-						ins:modrm_reg(0) -- extension for ADD
-						ins:modrm_rm(reg1.i)
-						ins:encode()
-						self:emit_i32(op2)
-					end
-				else
-					local reg2 = op2
-					local ins = self:ins()
-					ins:rex_reg(reg1, reg2)
-					ins:opcode(0x03)
-					ins:reg_reg(reg1, reg2)
-					ins:encode()
-				end
-			end
-
-			function Assembler:sub(reg1, op2)
-				if type(op2) == "number" then
-					local ins = self:ins()
-					ins:rex_reg(reg1)
-
-					if op2 >= -128 and op2 <= 127 then
-						ins:opcode(0x83)
-						ins:modrm_mode("direct")
-						ins:modrm_reg(5) -- extension for SUB
-						ins:modrm_rm(reg1.i)
-						ins:encode()
-						self:emit_i8(op2)
-					else
-						ins:opcode(0x81)
-						ins:modrm_mode("direct")
-						ins:modrm_reg(5) -- extension for SUB
-						ins:modrm_rm(reg1.i)
-						ins:encode()
-						self:emit_i32(op2)
-					end
-				else
-					local reg2 = op2
-					local ins = self:ins()
-					ins:rex_reg(reg1, reg2)
-					ins:opcode(0x2B)
-					ins:reg_reg(reg1, reg2)
-					ins:encode()
-				end
-			end
-
-			function Assembler:cmp(reg1, op2)
-				assert(reg1.bits == 64, "only supports 64-bit registers")
-
-				if type(op2) == "number" then
-					local ins = self:ins()
-					ins:rex_reg(reg1)
-
-					if op2 >= -128 and op2 <= 127 then
-						ins:opcode(0x83)
-						ins:modrm_mode("direct")
-						ins:modrm_reg(7) -- extension for CMP
-						ins:modrm_rm(reg1.i)
-						ins:encode()
-						self:emit_i8(op2)
-					else
-						ins:opcode(0x81)
-						ins:modrm_mode("direct")
-						ins:modrm_reg(7) -- extension for CMP
-						ins:modrm_rm(reg1.i)
-						ins:encode()
-						self:emit_i32(op2)
-					end
-				else
-					local reg2 = op2
-					local ins = self:ins()
-					ins:rex_reg(reg1, reg2)
-					ins:opcode(0x3B)
-					ins:reg_reg(reg1, reg2)
-					ins:encode()
-				end
-			end
-		end
-
-		function Assembler:inc(reg)
-			local ins = self:ins()
-			ins:rex_reg(reg)
-			ins:opcode(0xFF)
-			ins:modrm_mode("direct")
-			ins:modrm_reg(0)
-			ins:modrm_rm(reg.i)
-			ins:encode()
-		end
-
-		function Assembler:dec(reg)
-			local ins = self:ins()
-			ins:rex_reg(reg)
-			ins:opcode(0xFF)
-			ins:modrm_mode("direct")
-			ins:modrm_reg(1)
-			ins:modrm_rm(reg.i)
-			ins:encode()
-		end
-
-		function Assembler:mul(reg)
-			local ins = self:ins()
-			ins:rex_reg(reg)
-			ins:opcode(0xF7)
-			ins:modrm_mode("direct")
-			ins:modrm_reg(4)
-			ins:modrm_rm(reg.i)
-			ins:encode()
-		end
-
-		do
-			do -- xor
-				local function reg_to_reg(self, dst, src)
-					local ins = self:ins()
-					ins:rex_reg(dst, src)
-					ins:opcode(0x33)
-					ins:reg_reg(dst, src)
-					ins:encode()
-				end
-
-				local function mem_to_reg(self, dst, src)
-					local ins = self:ins()
-					ins:rex_reg(dst, src)
-					ins:opcode(0x33) -- XOR r64, r/m64
-					ins:reg_reg(dst, src)
-					ins:encode()
-				end
-
-				local function reg_to_mem(self, dst, src)
-					local ins = self:ins()
-					ins:rex_reg(src, dst)
-					ins:opcode(0x31) -- XOR r/m64, r64
-					ins:reg_reg(src, dst)
-					ins:encode()
-				end
-
-				local function imm_to_reg(self, dst, imm)
-					handle_immediate_operation(self, dst, imm, 6) -- 6 is XOR in ModR/M
-				end
-
-				local function imm_to_mem(self, dst, imm)
-					local ins = self:ins()
-					ins:rex_reg(dst)
-
-					if imm >= -128 and imm <= 127 then
-						ins:opcode(0x83) -- XOR r/m64, imm8
-					else
-						ins:opcode(0x81) -- XOR r/m64, imm32
-					end
-
-					-- Set up ModR/M byte
-					ins:modrm_mode("indirect") -- 00 in ModR/M
-					ins:modrm_reg(6) -- 110 in ModR/M (6 is XOR operation)
-					ins:modrm_use_sib() -- Use SIB byte (rm = 4)
-					-- Set up SIB byte
-					ins:sib_scale(1)
-					ins:sib_base(NO_BASE) -- No base register, use displacement only
-					-- Add displacement
-					ins:displace(dst.disp)
-					-- Emit the instruction
-					ins:encode()
-
-					-- Emit the immediate value
-					if imm >= -128 and imm <= 127 then
-						self:emit_i8(imm)
-					else
-						self:emit_i32(imm)
-					end
-				end
-
-				function Assembler:xor(dst, src)
-					if tonumber(src) then
-						-- Immediate operand
-						if dst:is_indirect() then
-							imm_to_mem(self, dst, src)
-						else
-							imm_to_reg(self, dst, src)
-						end
-					elseif src:is_indirect() then
-						-- Memory source
-						if dst:is_indirect() then
-							error("Cannot XOR between two memory locations")
-						end
-
-						mem_to_reg(self, dst, src)
-					elseif dst:is_indirect() then
-						-- Memory destination
-						reg_to_mem(self, dst, src)
-					else
-						-- Register to register
-						reg_to_reg(self, dst, src)
-					end
-				end
-			end
-		end
-	end
-
-	do -- debug
-		require("moondust.breakpoint")(Assembler)
-	end
-
+	require("moondust.breakpoint")(Assembler) -- debug
 	require("moondust.wip_x64")(Assembler)
 end

@@ -1,3 +1,4 @@
+collectgarbage("stop")
 local Assembler = require("moondust")
 local R = Assembler.Registers
 local memory = require("moondust.memory")
@@ -882,8 +883,15 @@ test("basic operations", function(asm)
 		assert(state.rax == 0)
 	end)
 
+	asm:xor(R.rax, R.rax)
+	asm:add(R.rax, 1000)
+
+	asm:debug(function(state)
+		assert(state.rax == 1000)
+	end)
+
 	asm:add(R.rax, 2)
-	asm:xor(R.rax, 2)
+	asm:xor(R.rax, R.rax)
 
 	asm:debug(function(state)
 		assert(state.rax == 0)

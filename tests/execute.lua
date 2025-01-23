@@ -137,7 +137,7 @@ check(
 		a:ret()
 	end),
 	"expected TARGET"
-)
+
 check(
 	5,
 	"==",
