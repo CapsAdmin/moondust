@@ -11,5 +11,17 @@
     "moondust/x86_64_data.lua": true,
     "build/x86data.js": true,
     "build/json.lua": true
-  }
+  },
+  "editor.formatOnSave": true,
+  "editor.defaultFormatter": "unpublished.nattlua",
+  "editor.semanticHighlighting.enabled": true,
+  "editor.inlayHints.enabled": "on",
+  "runOnSave.statusMessageTimeout": 3000,
+  "runOnSave.commands": [
+    {
+      "globMatch": "**",
+      "command": "cd ${workspaceFolder} && luajit tests/init.lua",
+      "runIn": "terminal"
+    }
+  ]
 }
